@@ -244,10 +244,33 @@ def _legacy_metadata(
         gt = normalize_answer(conversations[1].get("value") if len(conversations) > 1 else "")
         lookup[(question, gt)].append((source_index, item))
 
+    # Legacy outputs do not preserve a stable source ID, and evaluation can
+    # skip rows.  Matching the first occurrence is unsafe when the same QA
+    # belongs to different scenes or feature slices.  An identical evidence
+    # identity is safe even if its source row occurs more than once.
+    ambiguous_keys = set()
+    for key, candidates in lookup.items():
+        identities = set()
+        for source_index, item in candidates:
+            metadata = _test_item_metadata(item, source_index)
+            identities.add((
+                str(metadata["scene_id"]) if metadata["scene_id"] is not None else None,
+                metadata["scene_token"],
+                tuple(metadata["feat_indices"]) if metadata["feat_indices"] is not None else None,
+                tuple(metadata["feat_range"]) if metadata["feat_range"] is not None else None,
+            ))
+        if len(identities) > 1:
+            ambiguous_keys.add(key)
+
     result: List[Optional[Dict[str, Any]]] = []
     unmatched = 0
+    ambiguous = 0
     for question, ground_truth in zip(questions, ground_truths):
         key = (clean_question(question), normalize_answer(ground_truth))
+        if key in ambiguous_keys:
+            result.append(None)
+            ambiguous += 1
+            continue
         candidates = lookup.get(key)
         if not candidates:
             result.append(None)
@@ -257,6 +280,11 @@ def _legacy_metadata(
         result.append(_test_item_metadata(item, source_index))
     if unmatched:
         warnings.append(f"{TASK_LABELS[task]}有 {unmatched} 条旧结果无法可靠关联测试场景")
+    if ambiguous:
+        warnings.append(
+            f"{TASK_LABELS[task]}有 {ambiguous} 条旧结果的问题与 GT 对应不同场景或输入帧；"
+            "无法唯一关联，已禁用自动配图"
+        )
     return result, warnings
 
 

@@ -133,6 +133,108 @@ class RepositoryTests(unittest.TestCase):
         self.assertIsNone(repo.samples[0].scene_id)
         self.assertTrue(repo.warnings)
 
+    def test_ambiguous_legacy_qa_does_not_choose_the_first_scene(self):
+        predictions = {
+            "existence": {
+                "predictions": ["Yes.", "No."],
+                "ground_truths": ["Yes.", "Yes."],
+                "questions": ["Was a car present?", "Was a car present?"],
+            }
+        }
+        test_data = [
+            {
+                "scene_id": scene_id,
+                "task": "existence",
+                "conversations": [
+                    {"value": "Was a car present?"}, {"value": "Yes."},
+                ],
+            }
+            for scene_id in ("scene-a", "scene-b")
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = EvaluationRepository.from_files(
+                _write_json(directory, "legacy.json", predictions),
+                test_data_path=_write_json(directory, "test.json", test_data),
+            )
+        self.assertTrue(all(sample.scene_id is None for sample in repo.samples))
+        self.assertTrue(any("2 条" in warning and "无法唯一关联" in warning for warning in repo.warnings))
+
+    def test_same_scene_with_distinct_input_frames_is_also_ambiguous(self):
+        predictions = {
+            "existence": {
+                "predictions": ["Yes."], "ground_truths": ["Yes."],
+                "questions": ["Was a car present?"],
+            }
+        }
+        for frame_metadata in (
+            ({"feat_indices": [0, 2]}, {"feat_indices": [4, 6]}),
+            ({"feat_range": [0, 2]}, {"feat_range": [4, 6]}),
+            ({"scene_token": "token-a"}, {"scene_token": "token-b"}),
+        ):
+            with self.subTest(frame_metadata=frame_metadata):
+                test_data = [
+                    {
+                        "scene_id": "scene-a", "task": "existence", **metadata,
+                        "conversations": [
+                            {"value": "Was a car present?"}, {"value": "Yes."},
+                        ],
+                    }
+                    for metadata in frame_metadata
+                ]
+                with tempfile.TemporaryDirectory() as directory:
+                    repo = EvaluationRepository.from_files(
+                        _write_json(directory, "legacy.json", predictions),
+                        test_data_path=_write_json(directory, "test.json", test_data),
+                    )
+                self.assertIsNone(repo.samples[0].scene_id)
+                self.assertTrue(any("无法唯一关联" in warning for warning in repo.warnings))
+
+    def test_repeated_legacy_rows_with_identical_evidence_can_link_in_order(self):
+        predictions = {
+            "existence": {
+                "predictions": ["Yes.", "No."],
+                "ground_truths": ["Yes.", "Yes."],
+                "questions": ["Was a car present?", "Was a car present?"],
+            }
+        }
+        item = {
+            "scene_id": "scene-a", "scene_token": "token-a", "task": "existence",
+            "feat_indices": [0, 2], "feat_range": [0, 2],
+            "conversations": [{"value": "Was a car present?"}, {"value": "Yes."}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            repo = EvaluationRepository.from_files(
+                _write_json(directory, "legacy.json", predictions),
+                test_data_path=_write_json(directory, "test.json", [item, item]),
+            )
+        self.assertEqual([sample.scene_id for sample in repo.samples], ["scene-a", "scene-a"])
+        self.assertEqual([sample.source_index for sample in repo.samples], [0, 1])
+        self.assertEqual(repo.warnings, ())
+
+    def test_explicit_prediction_metadata_is_not_changed_by_legacy_ambiguity(self):
+        predictions = {
+            "existence": {
+                "predictions": ["Yes."], "ground_truths": ["Yes."],
+                "questions": ["Was a car present?"],
+                "samples": [{"sample_id": "saved-7", "scene_id": "scene-b"}],
+            }
+        }
+        test_data = [
+            {
+                "scene_id": scene_id, "task": "existence",
+                "conversations": [{"value": "Was a car present?"}, {"value": "Yes."}],
+            }
+            for scene_id in ("scene-a", "scene-b")
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = EvaluationRepository.from_files(
+                _write_json(directory, "saved.json", predictions),
+                test_data_path=_write_json(directory, "test.json", test_data),
+            )
+        self.assertEqual(repo.samples[0].sample_id, "saved-7")
+        self.assertEqual(repo.samples[0].scene_id, "scene-b")
+        self.assertEqual(repo.warnings, ())
+
     def test_misaligned_arrays_fail_fast(self):
         predictions = {
             "binary_qa": {
