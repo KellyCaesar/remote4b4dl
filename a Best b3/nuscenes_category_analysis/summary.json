@@ -1,0 +1,466 @@
+{
+  "source_file": "D:\\Github\\mmb4dl\\a Best b3\\predictions.json",
+  "source_sha256": "e5d1fe81ede865ecf496b21c1d67185dd8aacc8fea891b598f74c363ad637d89",
+  "protocol": "text-only-taxonomy-association-v1",
+  "date": "2026-10-12",
+  "tasks": {
+    "description": {
+      "total": 3770,
+      "unique_predictions": 2964,
+      "with_official_mention": 3770,
+      "with_positive": 3770,
+      "with_positive_thing": 3768,
+      "with_positive_stuff": 3466,
+      "with_both": 3464,
+      "with_negated": 85,
+      "with_conditional": 14,
+      "with_generic": 24,
+      "with_frames": 3140,
+      "with_risk": 198,
+      "review": 143,
+      "no_official_mention": 0,
+      "relations": {
+        "对象与环境区域": 3464,
+        "仅对象类别": 304,
+        "仅环境区域": 2
+      }
+    },
+    "temporal_understanding": {
+      "total": 4757,
+      "unique_predictions": 3345,
+      "with_official_mention": 3745,
+      "with_positive": 3651,
+      "with_positive_thing": 3047,
+      "with_positive_stuff": 1761,
+      "with_both": 1157,
+      "with_negated": 76,
+      "with_conditional": 20,
+      "with_generic": 33,
+      "with_frames": 546,
+      "with_risk": 264,
+      "review": 1123,
+      "no_official_mention": 1012,
+      "relations": {
+        "仅对象类别": 1890,
+        "无明确分割类别": 607,
+        "对象与环境区域": 1157,
+        "仅原始ignore类别": 405,
+        "仅环境区域": 604,
+        "仅否定/条件/泛指类别": 94
+      }
+    },
+    "comprehensive_reasoning": {
+      "total": 7540,
+      "unique_predictions": 6922,
+      "with_official_mention": 6557,
+      "with_positive": 6400,
+      "with_positive_thing": 5452,
+      "with_positive_stuff": 3584,
+      "with_both": 2636,
+      "with_negated": 98,
+      "with_conditional": 64,
+      "with_generic": 238,
+      "with_frames": 589,
+      "with_risk": 2030,
+      "review": 1414,
+      "no_official_mention": 983,
+      "relations": {
+        "仅对象类别": 2816,
+        "对象与环境区域": 2636,
+        "仅环境区域": 948,
+        "仅原始ignore类别": 702,
+        "无明确分割类别": 281,
+        "仅否定/条件/泛指类别": 157
+      }
+    }
+  },
+  "classes": {
+    "barrier": {
+      "description": {
+        "肯定提及": 1066,
+        "否定存在": 0,
+        "条件或可能": 14,
+        "泛指或建议": 0,
+        "任意提及": 1080
+      },
+      "temporal_understanding": {
+        "肯定提及": 336,
+        "否定存在": 5,
+        "条件或可能": 12,
+        "泛指或建议": 3,
+        "任意提及": 356
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 981,
+        "否定存在": 7,
+        "条件或可能": 41,
+        "泛指或建议": 21,
+        "任意提及": 1050
+      }
+    },
+    "bicycle": {
+      "description": {
+        "肯定提及": 45,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 45
+      },
+      "temporal_understanding": {
+        "肯定提及": 49,
+        "否定存在": 7,
+        "条件或可能": 3,
+        "泛指或建议": 0,
+        "任意提及": 59
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 108,
+        "否定存在": 5,
+        "条件或可能": 7,
+        "泛指或建议": 2,
+        "任意提及": 122
+      }
+    },
+    "bus": {
+      "description": {
+        "肯定提及": 2512,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 2512
+      },
+      "temporal_understanding": {
+        "肯定提及": 764,
+        "否定存在": 1,
+        "条件或可能": 3,
+        "泛指或建议": 0,
+        "任意提及": 768
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 1167,
+        "否定存在": 0,
+        "条件或可能": 7,
+        "泛指或建议": 12,
+        "任意提及": 1186
+      }
+    },
+    "car": {
+      "description": {
+        "肯定提及": 2952,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 2952
+      },
+      "temporal_understanding": {
+        "肯定提及": 1193,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 1193
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 2192,
+        "否定存在": 1,
+        "条件或可能": 3,
+        "泛指或建议": 11,
+        "任意提及": 2207
+      }
+    },
+    "construction_vehicle": {
+      "description": {
+        "肯定提及": 32,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 32
+      },
+      "temporal_understanding": {
+        "肯定提及": 21,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 21
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 40,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 40
+      }
+    },
+    "motorcycle": {
+      "description": {
+        "肯定提及": 147,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 147
+      },
+      "temporal_understanding": {
+        "肯定提及": 52,
+        "否定存在": 0,
+        "条件或可能": 2,
+        "泛指或建议": 0,
+        "任意提及": 54
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 138,
+        "否定存在": 2,
+        "条件或可能": 3,
+        "泛指或建议": 0,
+        "任意提及": 143
+      }
+    },
+    "pedestrian": {
+      "description": {
+        "肯定提及": 3626,
+        "否定存在": 83,
+        "条件或可能": 5,
+        "泛指或建议": 21,
+        "任意提及": 3692
+      },
+      "temporal_understanding": {
+        "肯定提及": 1137,
+        "否定存在": 69,
+        "条件或可能": 2,
+        "泛指或建议": 9,
+        "任意提及": 1216
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 2212,
+        "否定存在": 84,
+        "条件或可能": 9,
+        "泛指或建议": 72,
+        "任意提及": 2350
+      }
+    },
+    "traffic_cone": {
+      "description": {
+        "肯定提及": 404,
+        "否定存在": 2,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 406
+      },
+      "temporal_understanding": {
+        "肯定提及": 221,
+        "否定存在": 2,
+        "条件或可能": 10,
+        "泛指或建议": 1,
+        "任意提及": 234
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 597,
+        "否定存在": 5,
+        "条件或可能": 27,
+        "泛指或建议": 18,
+        "任意提及": 647
+      }
+    },
+    "trailer": {
+      "description": {
+        "肯定提及": 16,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 16
+      },
+      "temporal_understanding": {
+        "肯定提及": 27,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 27
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 52,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 52
+      }
+    },
+    "truck": {
+      "description": {
+        "肯定提及": 1558,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 1558
+      },
+      "temporal_understanding": {
+        "肯定提及": 550,
+        "否定存在": 1,
+        "条件或可能": 3,
+        "泛指或建议": 1,
+        "任意提及": 555
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 972,
+        "否定存在": 0,
+        "条件或可能": 8,
+        "泛指或建议": 6,
+        "任意提及": 985
+      }
+    },
+    "driveable_surface": {
+      "description": {
+        "肯定提及": 2308,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 3,
+        "任意提及": 2308
+      },
+      "temporal_understanding": {
+        "肯定提及": 1123,
+        "否定存在": 1,
+        "条件或可能": 1,
+        "泛指或建议": 22,
+        "任意提及": 1145
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 2409,
+        "否定存在": 3,
+        "条件或可能": 4,
+        "泛指或建议": 152,
+        "任意提及": 2529
+      }
+    },
+    "other_flat": {
+      "description": {
+        "肯定提及": 0,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 0
+      },
+      "temporal_understanding": {
+        "肯定提及": 0,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 0
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 0,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 0
+      }
+    },
+    "sidewalk": {
+      "description": {
+        "肯定提及": 2783,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 2783
+      },
+      "temporal_understanding": {
+        "肯定提及": 480,
+        "否定存在": 0,
+        "条件或可能": 1,
+        "泛指或建议": 0,
+        "任意提及": 481
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 990,
+        "否定存在": 0,
+        "条件或可能": 2,
+        "泛指或建议": 0,
+        "任意提及": 992
+      }
+    },
+    "terrain": {
+      "description": {
+        "肯定提及": 12,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 12
+      },
+      "temporal_understanding": {
+        "肯定提及": 11,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 1,
+        "任意提及": 12
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 28,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 28
+      }
+    },
+    "manmade": {
+      "description": {
+        "肯定提及": 1079,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 1079
+      },
+      "temporal_understanding": {
+        "肯定提及": 439,
+        "否定存在": 0,
+        "条件或可能": 3,
+        "泛指或建议": 0,
+        "任意提及": 442
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 876,
+        "否定存在": 0,
+        "条件或可能": 8,
+        "泛指或建议": 4,
+        "任意提及": 886
+      }
+    },
+    "vegetation": {
+      "description": {
+        "肯定提及": 727,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 0,
+        "任意提及": 727
+      },
+      "temporal_understanding": {
+        "肯定提及": 174,
+        "否定存在": 0,
+        "条件或可能": 0,
+        "泛指或建议": 1,
+        "任意提及": 175
+      },
+      "comprehensive_reasoning": {
+        "肯定提及": 449,
+        "否定存在": 0,
+        "条件或可能": 2,
+        "泛指或建议": 0,
+        "任意提及": 451
+      }
+    }
+  },
+  "total": 16067,
+  "sources": [
+    [
+      "官方16类及ignore映射",
+      "https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/eval/lidarseg/utils.py"
+    ],
+    [
+      "官方Thing/Stuff划分",
+      "https://github.com/nutonomy/nuscenes-devkit/blob/master/python-sdk/nuscenes/eval/panoptic/utils.py"
+    ],
+    [
+      "对象类别定义：SUV/van/施工车辆/骑行者",
+      "https://github.com/nutonomy/nuscenes-devkit/blob/master/docs/instructions_nuscenes.md"
+    ],
+    [
+      "地面/植被/人工结构定义",
+      "https://github.com/nutonomy/nuscenes-devkit/blob/master/docs/instructions_lidarseg.md"
+    ]
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "source_sha256": "e5d1fe81ede865ecf496b21c1d67185dd8aacc8fea891b598f74c363ad637d89",
+  "source_unchanged": true,
+  "aligned_prediction_rows": 16067,
+  "unique_task_index_pairs": 16067,
+  "csv_rows_verified": true,
+  "evidence_spans_verified": true,
+  "category_matrix_rows": 16067,
+  "class_frequency_recomputed": true,
+  "totals": {
+    "total": 16067,
+    "with_positive": 13821,
+    "no_official_mention": 1995,
+    "with_negated": 259,
+    "with_conditional": 98,
+    "with_generic": 295,
+    "review": 2680
+  },
+  "method": "全量规则分析及原文/证据/汇总一致性核验；典型和边界案例人工抽查",
+  "xlsx_all_20_columns_verified": 16067,
+  "xlsx_summary_matches_current_analysis": true,
+  "xlsx_filters_and_freeze_panes_verified": true,
+  "xlsx_size_bytes": 3321980
+}

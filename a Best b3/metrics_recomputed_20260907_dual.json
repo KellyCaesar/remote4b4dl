@@ -1,0 +1,95 @@
+{
+  "per_task_metrics": {
+    "existence": {
+      "accuracy": 0.6761273209549071
+    },
+    "binary_qa": {
+      "accuracy": 0.8291029900332226
+    },
+    "time_grounding": {
+      "miou": 0.3467090076609961
+    },
+    "description": {
+      "bleu4": 0.10546335683789328,
+      "meteor": 0.3501391979986315,
+      "rouge_l": 0.3170865313456506,
+      "bertscore": 0.8966626524925232,
+      "meteor_pycocoevalcap": 0.19132778664934172
+    },
+    "temporal_understanding": {
+      "bleu4": 0.08527908131439146,
+      "meteor": 0.3344750771107599,
+      "rouge_l": 0.32646092078428257,
+      "bertscore": 0.897441565990448,
+      "meteor_pycocoevalcap": 0.1650673953348514
+    },
+    "comprehensive_reasoning": {
+      "bleu4": 0.09866227107834157,
+      "meteor": 0.32516348941086565,
+      "rouge_l": 0.32654780256381316,
+      "bertscore": 0.8959501385688782,
+      "meteor_pycocoevalcap": 0.1678388003198059
+    }
+  },
+  "final_scores": {
+    "accuracy": 0.7526151554940649,
+    "miou": 0.3467090076609961,
+    "bleu4": 0.09646823641020878,
+    "meteor": 0.336592588173419,
+    "rouge_l": 0.32336508489791543,
+    "bertscore": 0.8966847856839498,
+    "meteor_pycocoevalcap": 0.17474466076799966
+  },
+  "metric_backend": {
+    "bertscore": {
+      "model_type": "/root/autodl-tmp/wql/mmb4dl/models/roberta-large",
+      "num_layers": 17,
+      "rescale_with_baseline": false
+    },
+    "bleu4": "pycocoevalcap-corpus",
+    "meteor": {
+      "mode": "dual",
+      "reported": "nltk-meteor-1.0",
+      "nltk_2005": {
+        "implementation": "nltk.translate.meteor_score (per-sample)",
+        "source": "Banerjee & Lavie 2005 (B4DL paper ref [2])",
+        "params": {
+          "alpha": 0.9,
+          "beta": 3.0,
+          "gamma": 0.5
+        },
+        "modules": [
+          "exact",
+          "porter-stem",
+          "wordnet-synonymy"
+        ],
+        "paraphrase": false,
+        "aggregation": "per-sample-mean",
+        "nltk_version": "3.10.0"
+      },
+      "pycocoevalcap_meteor_1_5": {
+        "implementation": "pycocoevalcap Meteor-1.5 jar (java)",
+        "task": "rank",
+        "params": {
+          "alpha": 0.85,
+          "beta": 0.2,
+          "gamma": 0.6,
+          "delta": 0.75
+        },
+        "modules": [
+          "exact",
+          "stem",
+          "synonym",
+          "paraphrase"
+        ],
+        "weights": [
+          1.0,
+          0.6,
+          0.8,
+          0.6
+        ],
+        "aggregation": "EVAL corpus"
+      }
+    }
+  }
+}

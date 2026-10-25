@@ -1,0 +1,48 @@
+{
+  "per_task_metrics": {
+    "existence": {
+      "accuracy": 0.6761273209549071
+    },
+    "binary_qa": {
+      "accuracy": 0.8291029900332226
+    },
+    "time_grounding": {
+      "miou": 0.3467090076609961
+    },
+    "description": {
+      "bleu4": 0.10546335683789328,
+      "meteor": 0.19132778664934172,
+      "rouge_l": 0.3170865313456506,
+      "bertscore": 0.8966626524925232
+    },
+    "temporal_understanding": {
+      "bleu4": 0.08527908131439146,
+      "meteor": 0.1650673953348514,
+      "rouge_l": 0.32646092078428257,
+      "bertscore": 0.897441565990448
+    },
+    "comprehensive_reasoning": {
+      "bleu4": 0.09866227107834157,
+      "meteor": 0.1678388003198059,
+      "rouge_l": 0.32654780256381316,
+      "bertscore": 0.8959501385688782
+    }
+  },
+  "final_scores": {
+    "accuracy": 0.7526151554940649,
+    "miou": 0.3467090076609961,
+    "bleu4": 0.09646823641020878,
+    "meteor": 0.17474466076799966,
+    "rouge_l": 0.32336508489791543,
+    "bertscore": 0.8966847856839498
+  },
+  "metric_backend": {
+    "bertscore": {
+      "model_type": "/root/autodl-tmp/wql/mmb4dl/models/roberta-large",
+      "num_layers": 17,
+      "rescale_with_baseline": false
+    },
+    "bleu4": "pycocoevalcap-corpus",
+    "meteor": "pycocoevalcap-meteor-1.5"
+  }
+}
