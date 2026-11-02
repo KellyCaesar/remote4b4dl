@@ -9,12 +9,12 @@ import torch
 
 from b4dl_core.integration import attach, language_model
 from b4dl_core.reasoning.policy import (add_reference_adapter, decode_completion,
-    expanded_log_probs, extension_state, load_checkpoint, reference_policy, save_checkpoint,
+    expanded_log_probs, extension_state, grpo_sequence_batch, load_checkpoint, reference_policy, save_checkpoint,
     sequence_batch, step_token_ends, teacher_completions)
 from b4dl_core.reasoning.protocol import encode_trace, parse_trace
 from b4dl_core.reasoning.rewards import score_trace
 from b4dl_core.reasoning.trainer import (FP32OutputHead, _optimizer, advantages, clipped_loss, grpo_update,
-                                          reset_gpu_memory, rollout_group, sampling_difference, sft_update,
+                                          reset_gpu_memory, rollout_group, sample_grpo, sampling_difference, sft_update,
                                           use_fp32_output_head)
 from b4dl_core.temporal import TemporalConfig
 from vtimellm.model.vtimellm_llama import VTimeLLMConfig, VTimeLLMLlamaForCausalLM
@@ -129,7 +129,7 @@ class ReasoningTrainingTests(unittest.TestCase):
         old = torch.zeros(2)
         within = torch.tensor([np.log(.81), np.log(1.19)])
         self.assertGreater(sampling_difference(old, within, .2, cuda=True), .1)
-        for ratio in (.79, 1.21):
+        for ratio in (.79, 1.21, np.exp(-.2754228), np.exp(.2754228)):
             with self.assertRaises(ValueError):
                 sampling_difference(torch.zeros(1), torch.tensor([np.log(ratio)]), .2, cuda=True)
         with self.assertRaises(ValueError):
@@ -140,15 +140,145 @@ class ReasoningTrainingTests(unittest.TestCase):
         request, target = example("existence")
         text = encode_trace(target["trace"])
         ids = self.tokenizer.encode(text) + [self.tokenizer.eos_token_id]
-        batch = sequence_batch(net, self.tokenizer, [item()], [ids])
+        batch = grpo_sequence_batch(net, self.tokenizer, item(), ids, 512)
         with torch.no_grad():
             recomputed = expanded_log_probs(net, batch)[0].cpu()
         sampled = recomputed + 0.00003
         response = {"ids": ids, "text": text, "status": "ok", "sampled_log_probs": sampled.clone()}
-        with patch("b4dl_core.reasoning.trainer.sample_one", return_value=response):
+        with patch("b4dl_core.reasoning.trainer.sample_grpo", return_value=response):
             group = rollout_group(net, self.tokenizer, item(), request, target, group_size=1, max_new_tokens=512)
         torch.testing.assert_close(group[0]["old"], sampled, rtol=0, atol=0)
         self.assertGreater(group[0]["logprob_max_difference"], 0)
+
+    def test_fixed_shape_sampler_matches_training_forward_and_keeps_eos(self):
+        net = model(); add_reference_adapter(net)
+        drawn, shapes = [], []
+
+        def choose(probabilities, count):
+            token = [ord("a") + 3, ord("b") + 3, self.tokenizer.eos_token_id][len(drawn)]
+            drawn.append((probabilities.detach().clone(), token))
+            return torch.tensor([token], device=probabilities.device)
+
+        def capture(module, args, kwargs):
+            shapes.append((kwargs["inputs_embeds"].shape[1], kwargs["use_cache"]))
+
+        hook = net.register_forward_pre_hook(capture, with_kwargs=True)
+        try:
+            with patch("torch.multinomial", side_effect=choose):
+                sample = sample_grpo(net, self.tokenizer, item(), 8)
+            self.assertEqual(sample["ids"], [ord("a") + 3, ord("b") + 3, 2])
+            self.assertEqual(sample["status"], "ok")
+            for i, (probabilities, token) in enumerate(drawn):
+                torch.testing.assert_close(sample["sampled_log_probs"][i], probabilities[token].log(),
+                                           atol=1e-6, rtol=0)
+            batch = grpo_sequence_batch(net, self.tokenizer, item(), sample["ids"], 8)
+            net.train()
+            recomputed = expanded_log_probs(net, batch)[0]
+            self.assertEqual(len(recomputed), len(sample["ids"]))
+            sampling_difference(sample["sampled_log_probs"], recomputed.detach().cpu(), .2, cuda=False)
+            (-recomputed.mean()).backward()
+            self.assertTrue(any(p.grad is not None and torch.isfinite(p.grad).all()
+                                and p.grad.abs().sum() > 0 for n, p in net.named_parameters()
+                                if ".lora_" in n and ".default." in n))
+            self.assertTrue(shapes)
+            self.assertEqual(len({shape for shape, _ in shapes}), 1)
+            self.assertTrue(all(cache is False for _, cache in shapes))
+        finally:
+            hook.remove()
+
+    def test_fixed_shape_sampler_truncation_and_causal_padding(self):
+        net = model(); add_reference_adapter(net); net.eval()
+        tokens = [ord("a") + 3, ord("b") + 3, ord("c") + 3]
+        with patch("torch.multinomial", side_effect=[torch.tensor([token]) for token in tokens]):
+            sample = sample_grpo(net, self.tokenizer, item(), len(tokens))
+        self.assertEqual(sample["ids"], tokens)
+        self.assertEqual(sample["status"], "truncated")
+        with torch.no_grad():
+            score = expanded_log_probs(net, grpo_sequence_batch(net, self.tokenizer, item(), tokens, 3))[0]
+            longer = grpo_sequence_batch(net, self.tokenizer, item(), tokens, 8)
+            reference = expanded_log_probs(net, longer)[0]
+            longer["input_ids"][0, -5:] = ord("z") + 3
+            changed_suffix = expanded_log_probs(net, longer)[0]
+        sampling_difference(sample["sampled_log_probs"], score.cpu(), .2, cuda=False)
+        torch.testing.assert_close(reference, changed_suffix, atol=1e-6, rtol=0)
+        with self.assertRaises(ValueError):
+            grpo_sequence_batch(net, self.tokenizer, item(), tokens, 2)
+        with self.assertRaises(ValueError):
+            grpo_sequence_batch(net, self.tokenizer, item(), [], 8)
+
+    def test_fixed_shape_sampler_handles_immediate_eos_and_forbidden_token(self):
+        net = model(); add_reference_adapter(net)
+        with patch("torch.multinomial", return_value=torch.tensor([2])):
+            sample = sample_grpo(net, self.tokenizer, item(), 8)
+        self.assertEqual((sample["ids"], sample["status"]), ([2], "ok"))
+        with torch.no_grad():
+            logp = expanded_log_probs(net, grpo_sequence_batch(net, self.tokenizer, item(), [2], 8))[0]
+        sampling_difference(sample["sampled_log_probs"], logp.cpu(), .2, cuda=False)
+        with patch("torch.multinomial", side_effect=[torch.tensor([1]), torch.tensor([2])]):
+            sample = sample_grpo(net, self.tokenizer, item(), 8)
+        self.assertEqual((sample["ids"], sample["status"]), ([1, 2], "error"))
+        with self.assertRaises(ValueError):
+            sample_grpo(net, self.tokenizer, item(), 0)
+
+    def test_fixed_shape_bfloat16_cpu_alignment(self):
+        net = model(); use_fp32_output_head(net); add_reference_adapter(net)
+        tokens = [ord("a") + 3, ord("b") + 3, self.tokenizer.eos_token_id]
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16), \
+             patch("torch.multinomial", side_effect=[torch.tensor([token]) for token in tokens]):
+            sample = sample_grpo(net, self.tokenizer, item(), 8)
+            net.train()
+            recomputed = expanded_log_probs(net, grpo_sequence_batch(net, self.tokenizer, item(), tokens, 8))[0]
+        sampling_difference(sample["sampled_log_probs"], recomputed.detach().cpu(), .2, cuda=True)
+        torch.testing.assert_close(sample["sampled_log_probs"], recomputed.detach().cpu(), atol=1e-4, rtol=0)
+
+    def test_grpo_guard_rejects_mismatch_before_optimizer_step(self):
+        net = model(); add_reference_adapter(net); net.eval()
+        model_input = item()
+        ids = self.tokenizer.encode("abc") + [self.tokenizer.eos_token_id]
+        with torch.no_grad():
+            batch = grpo_sequence_batch(net, self.tokenizer, model_input, ids, 8)
+            old = expanded_log_probs(net, batch)[0].cpu()
+            with reference_policy(net):
+                ref = expanded_log_probs(net, batch)[0].cpu()
+        samples = [{"ids": ids, "old": old.clone(), "ref": ref, "ends": [],
+                    "score": {"answer_reward": reward, "step_scores": [0.], "valid": False},
+                    "logprob_max_difference": 0.} for reward in (0., 1.)]
+        samples[1]["old"] += .01
+        optimizer = _optimizer(net, .001)
+        before = extension_state(net)
+        recipe = {"group_size": 2, "max_new_tokens": 8, "mode": "process",
+                  "process_weight": .5, "clip": .2, "beta": .04}
+        with patch("b4dl_core.reasoning.trainer.rollout_group", return_value=samples), \
+             patch.object(optimizer, "step") as step:
+            with self.assertRaisesRegex(ValueError, "sampled and recomputed"):
+                grpo_update(net, self.tokenizer, [(model_input, {}, {})], optimizer, recipe)
+            step.assert_not_called()
+        for name, value in extension_state(net).items():
+            torch.testing.assert_close(value, before[name], atol=0, rtol=0)
+
+    def test_online_grpo_fixed_shape_reaches_finite_gradients_without_update(self):
+        net = model(); add_reference_adapter(net)
+        optimizer = _optimizer(net, .001)
+        before, captured = extension_state(net), []
+        tokens = [ord("a") + 3, ord("b") + 3, 2, ord("c") + 3, ord("d") + 3, 2]
+        scores = [{"answer_reward": reward, "step_scores": [0.], "valid": False}
+                  for reward in (0., 1.)]
+        recipe = {"group_size": 2, "max_new_tokens": 8, "mode": "process",
+                  "process_weight": .5, "clip": .2, "beta": .04}
+
+        def inspect_gradients():
+            captured.extend(p.grad.detach().clone() for p in net.parameters() if p.grad is not None)
+
+        with patch("torch.multinomial", side_effect=[torch.tensor([token]) for token in tokens]), \
+             patch("b4dl_core.reasoning.trainer.score_trace", side_effect=scores), \
+             patch.object(optimizer, "step", side_effect=inspect_gradients) as step:
+            result = grpo_update(net, self.tokenizer, [(item(), {}, {})], optimizer, recipe)
+            step.assert_called_once()
+        self.assertEqual(result["completions"], 2)
+        self.assertTrue(captured and all(torch.isfinite(grad).all() for grad in captured))
+        self.assertGreater(sum(float(grad.abs().sum()) for grad in captured), 0.)
+        for name, value in extension_state(net).items():
+            torch.testing.assert_close(value, before[name], atol=0, rtol=0)
 
     def test_token_boundaries_use_actual_completion_ids(self):
         request, target = example("motion")
@@ -279,7 +409,7 @@ class ReasoningTrainingTests(unittest.TestCase):
             for trace in (truth["trace"], wrong):
                 text = encode_trace(trace)
                 ids = tokenizer.encode(text) + [tokenizer.eos_token_id]
-                batch = sequence_batch(current, tokenizer, [model_input], [ids])
+                batch = grpo_sequence_batch(current, tokenizer, model_input, ids, max_new_tokens)
                 with torch.no_grad():
                     old = expanded_log_probs(current, batch)[0].cpu()
                     with reference_policy(current): ref = expanded_log_probs(current, batch)[0].cpu()

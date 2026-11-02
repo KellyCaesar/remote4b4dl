@@ -12,7 +12,7 @@ from b4dl_core.io import read_json, read_jsonl, write_json
 from b4dl_core.reasoning.data import ReasoningDataset, build_data
 from b4dl_core.reasoning.evaluation import (checkpoint_lineage, compare_six_task_metrics, evaluate, infer,
                                             infer_six_task, load_free_six_task, load_model, prepare_free_six_task)
-from b4dl_core.reasoning.policy import expanded_log_probs, reference_policy, sequence_batch, step_token_ends
+from b4dl_core.reasoning.policy import expanded_log_probs, grpo_sequence_batch, reference_policy, step_token_ends
 from b4dl_core.reasoning.protocol import encode_trace
 from b4dl_core.reasoning.rewards import score_trace
 from b4dl_core.reasoning.trainer import train, use_fp32_output_head
@@ -50,7 +50,7 @@ class ReasoningEndToEndTests(unittest.TestCase):
                 for trace in (target["trace"], wrong):
                     text = encode_trace(trace)
                     ids = tokenizer.encode(text) + [tokenizer.eos_token_id]
-                    batch = sequence_batch(net, tokenizer, [model_input], [ids])
+                    batch = grpo_sequence_batch(net, tokenizer, model_input, ids, max_new_tokens)
                     with torch.no_grad():
                         old = expanded_log_probs(net, batch)[0].cpu()
                         with reference_policy(net): ref = expanded_log_probs(net, batch)[0].cpu()

@@ -9,12 +9,12 @@ import numpy as np
 import torch
 
 from ..b3 import chosen_config, load_original, verify_sst_binding
-from ..integration import attach, language_model, padding_side
+from ..integration import FRAME_KEYS, attach, language_model, padding_side
 from ..io import digest, sha256, write_json
 from ..resume import append_jsonl
 from ..runtime import runtime_identity
 from . import REWARD_VERSION
-from .policy import (add_reference_adapter, decode_completion, expanded_log_probs,
+from .policy import (add_reference_adapter, decode_completion, expanded_log_probs, grpo_sequence_batch,
                      load_checkpoint, reference_policy, save_checkpoint, sequence_batch,
                      step_token_ends, teacher_completions)
 from .rewards import score_trace
@@ -164,12 +164,52 @@ def sample_one(model, tokenizer, item, max_new_tokens, do_sample=True, record_sc
             "sampled_log_probs": sampled, "generation_seconds": time.perf_counter()-started}
 
 
+def sample_grpo(model, tokenizer, item, max_new_tokens):
+    """Sample from the same fixed-shape, causal forward used by GRPO scoring."""
+    from vtimellm.constants import IGNORE_INDEX
+    if type(max_new_tokens) is not int or max_new_tokens < 1:
+        raise ValueError("positive GRPO generation budget required")
+    eos = tokenizer.eos_token_id
+    batch = sequence_batch(model, tokenizer, [item], [[eos] * max_new_tokens])
+    base = language_model(model)
+    model.eval()
+    started = time.perf_counter()
+    ids, sampled = [], []
+    with torch.no_grad(), _precision(model), padding_side(base, "right"):
+        _, positions, attention, _, embeds, labels = base.prepare_inputs_labels_for_multimodal(
+            batch["input_ids"], None, batch["attention_mask"], None, batch["labels"],
+            batch["images"], **{key: batch[key] for key in FRAME_KEYS})
+        target_positions = labels[0].ne(IGNORE_INDEX).nonzero().flatten()
+        if (len(target_positions) != max_new_tokens or int(target_positions[0]) < 1
+                or not torch.equal(target_positions, torch.arange(
+                    target_positions[0], target_positions[0] + max_new_tokens, device=target_positions.device))):
+            raise ValueError("fixed-shape completion alignment failed")
+        for position in target_positions:
+            # Future EOS placeholders cannot affect this position through a causal mask.
+            logits = model(inputs_embeds=embeds, attention_mask=attention, position_ids=positions,
+                           use_cache=False).logits[0, position - 1].float().clone()
+            token = torch.multinomial(torch.softmax(logits, dim=-1), 1)
+            token_id = int(token.item())
+            sampled.append(torch.log_softmax(logits, dim=-1)[token_id].clone())
+            ids.append(token_id)
+            if ids[-1] == eos:
+                break
+            embeds[0, position] = base.get_input_embeddings()(token)[0]
+    status = "ok" if ids[-1] == eos else "truncated"
+    forbidden = set(getattr(tokenizer, "all_special_ids", [])) - {eos}
+    if any(token in forbidden for token in ids):
+        status = "error"
+    return {"ids": ids, "text": decode_completion(tokenizer, ids), "status": status,
+            "sampled_log_probs": torch.stack(sampled).detach().cpu(),
+            "generation_seconds": time.perf_counter()-started}
+
+
 def sampling_difference(sampled, recomputed, clip, *, cuda):
     """Validate the actual sampling distribution against the full forward pass.
 
-    BF16 cached decoding and full-sequence GEMMs can differ numerically. The
-    unchanged policy must nevertheless remain strictly inside both PPO clip
-    limits; CPU keeps the tighter alignment check used by the tiny-model tests.
+    BF16 forwards can still differ numerically. The unchanged policy must
+    remain strictly inside both PPO clip limits; CPU keeps the tighter alignment
+    check used by the tiny-model tests.
     """
     if (sampled.shape != recomputed.shape or not sampled.numel() or not 0 < clip < 1
             or not torch.isfinite(sampled).all() or not torch.isfinite(recomputed).all()):
@@ -187,8 +227,8 @@ def sampling_difference(sampled, recomputed, clip, *, cuda):
 def rollout_group(model, tokenizer, item, request, target, group_size=4, max_new_tokens=512, clip=.2):
     samples = []
     for _ in range(group_size):
-        sample = sample_one(model, tokenizer, item, max_new_tokens, record_scores=True)
-        batch = sequence_batch(model, tokenizer, [item], [sample["ids"]])
+        sample = sample_grpo(model, tokenizer, item, max_new_tokens)
+        batch = grpo_sequence_batch(model, tokenizer, item, sample["ids"], max_new_tokens)
         with torch.no_grad(), _precision(model):
             recomputed = expanded_log_probs(model, batch)[0].detach().cpu()
             with reference_policy(model):
@@ -263,7 +303,7 @@ def grpo_update(model, tokenizer, rows, optimizer, recipe):
     model.train()
     for item, group, group_adv in groups:
         for sample, advantage in zip(group, group_adv):
-            batch = sequence_batch(model, tokenizer, [item], [sample["ids"]])
+            batch = grpo_sequence_batch(model, tokenizer, item, sample["ids"], recipe["max_new_tokens"])
             with _precision(model):
                 logp = expanded_log_probs(model, batch)[0]
                 sampling_difference(sample["old"], logp.detach().cpu(), recipe["clip"], cuda=logp.device.type == "cuda")

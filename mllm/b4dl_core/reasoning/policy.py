@@ -43,6 +43,21 @@ def sequence_batch(model, tokenizer, items, completions=None):
     return batch
 
 
+def grpo_sequence_batch(model, tokenizer, item, completion, max_new_tokens):
+    """Keep the GRPO forward shape fixed, but score only real completion tokens."""
+    from vtimellm.constants import IGNORE_INDEX
+    if type(max_new_tokens) is not int or not 0 < len(completion) <= max_new_tokens:
+        raise ValueError("completion must fit the positive GRPO generation budget")
+    padding = max_new_tokens - len(completion)
+    # Padding stays in the causal input to match the sampler's tensor shape;
+    # only actual completion tokens, including a generated EOS, are labels.
+    batch = sequence_batch(model, tokenizer, [item],
+                           [list(completion) + [tokenizer.eos_token_id] * padding])
+    if padding:
+        batch["labels"][0, -padding:] = IGNORE_INDEX
+    return batch
+
+
 def teacher_completions(tokenizer, targets, max_new_tokens):
     rows = [tokenizer.encode(encode_trace(t["trace"]), add_special_tokens=False) + [tokenizer.eos_token_id]
             for t in targets]
