@@ -47,6 +47,11 @@ class VTimeLLMLlamaForCausalLM(LlamaForCausalLM, VTimeLLMMetaForCausalLM):
         frame_times: Optional[torch.Tensor] = None,
         frame_geometry: Optional[torch.Tensor] = None,
         frame_valid_mask: Optional[torch.Tensor] = None,
+        cell_features: Optional[torch.Tensor] = None,
+        cell_xyz: Optional[torch.Tensor] = None,
+        cell_indices: Optional[torch.Tensor] = None,
+        cell_valid_mask: Optional[torch.Tensor] = None,
+        ego_from_sst: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
         if inputs_embeds is None:
@@ -67,6 +72,11 @@ class VTimeLLMLlamaForCausalLM(LlamaForCausalLM, VTimeLLMMetaForCausalLM):
                 frame_times=frame_times,
                 frame_geometry=frame_geometry,
                 frame_valid_mask=frame_valid_mask,
+                cell_features=cell_features,
+                cell_xyz=cell_xyz,
+                cell_indices=cell_indices,
+                cell_valid_mask=cell_valid_mask,
+                ego_from_sst=ego_from_sst,
             )
 
         return super().forward(
@@ -85,7 +95,8 @@ class VTimeLLMLlamaForCausalLM(LlamaForCausalLM, VTimeLLMMetaForCausalLM):
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
-        frames = {key: kwargs.pop(key, None) for key in ("frame_times", "frame_geometry", "frame_valid_mask")}
+        from b4dl_core.integration import FRAME_KEYS
+        frames = {key: kwargs.pop(key, None) for key in FRAME_KEYS}
         _inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
@@ -97,7 +108,9 @@ class VTimeLLMLlamaForCausalLM(LlamaForCausalLM, VTimeLLMMetaForCausalLM):
     @torch.no_grad()
     def generate(self, inputs=None, **kwargs):
         images = kwargs.get("images")
-        core_frames = any(kwargs.get(k) is not None for k in ("frame_times", "frame_geometry", "frame_valid_mask")) or getattr(self.get_model(), 'frame_adapter', None) is not None
+        core_frames = (any(kwargs.get(k) is not None for k in ("frame_times", "frame_geometry", "frame_valid_mask"))
+                       or getattr(self.get_model(), 'frame_adapter', None) is not None
+                       or getattr(self.get_model(), 'regional_adapter', None) is not None)
         if images is not None and core_frames:
             from b4dl_core.integration import expand_generation
             inputs, kwargs = expand_generation(self, inputs, kwargs)

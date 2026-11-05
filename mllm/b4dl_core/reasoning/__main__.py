@@ -60,22 +60,37 @@ def main(argv=None):
     audit = sub.add_parser("audit")
     _dataset_args(audit)
     audit.add_argument("--tables", required=True); audit.add_argument("--support", required=True)
+    mixed = sub.add_parser("build-mixed-plan")
+    _dataset_args(mixed)
+    mixed.add_argument("--replay-source", action="append", required=True)
+    mixed.add_argument("--output", required=True)
+    mixed.add_argument("--seed", type=int, default=42)
+    mixed.add_argument("--updates", type=int)
     for stage in ("sft", "grpo"):
         p = sub.add_parser(stage)
         _dataset_args(p); _model_args(p)
         p.add_argument("--recipe", required=True); p.add_argument("--output", required=True)
         p.add_argument("--resume"); p.add_argument("--engineering", action="store_true")
         p.add_argument("--max-updates", type=int)
+        if stage == "sft":
+            p.add_argument("--regional-features")
+            p.add_argument("--regional-config")
+            p.add_argument("--mixed-plan")
+            p.add_argument("--supervision-config")
         if stage == "grpo":
             p.add_argument("--sft-checkpoint", required=True)
             p.add_argument("--mode", choices=("outcome", "scalar", "process"))
     infer = sub.add_parser("infer")
     _dataset_args(infer); _model_args(infer)
-    infer.add_argument("--checkpoint", required=True); infer.add_argument("--output", required=True)
+    infer_source = infer.add_mutually_exclusive_group(required=True)
+    infer_source.add_argument("--checkpoint"); infer_source.add_argument("--original-b3", action="store_true")
+    infer.add_argument("--output", required=True)
     infer.add_argument("--split", choices=("train", "internal_dev", "test"), default="test")
     infer.add_argument("--condition", choices=("identity", "zero", "repeat_first", "shuffle_features", "cross_scene"), default="identity")
     infer.add_argument("--max-new-tokens", type=int, default=512); infer.add_argument("--seed", type=int, default=42)
     infer.add_argument("--resume", action="store_true")
+    infer.add_argument("--regional-features")
+    infer.add_argument("--mixed-plan")
     evaluate = sub.add_parser("evaluate")
     _dataset_args(evaluate)
     evaluate.add_argument("--split", choices=("train", "internal_dev", "test"), required=True)
@@ -84,7 +99,10 @@ def main(argv=None):
     compare = sub.add_parser("compare")
     for name in ("base", "candidate", "output"): compare.add_argument("--"+name, required=True)
     compare.add_argument("--allow-incomplete", action="store_true")
-    compare.add_argument("--intervention", action="store_true", help="compare identity with a control for the same checkpoint")
+    comparison = compare.add_mutually_exclusive_group()
+    comparison.add_argument("--intervention", action="store_true", help="compare identity with a control for the same checkpoint")
+    comparison.add_argument("--ablation", action="store_true", help="compare distinct models with matched training assets and budget")
+    comparison.add_argument("--original-b3", action="store_true", help="compare original B3 with a trained model")
     six_prep = sub.add_parser("prepare-six-task")
     for name in ("project-root", "geometry-dataset", "historical-protocol", "output"):
         six_prep.add_argument("--"+name, required=True)
@@ -94,16 +112,24 @@ def main(argv=None):
     source.add_argument("--checkpoint"); source.add_argument("--original-b3", action="store_true")
     for name in ("protocol", "output"): six_infer.add_argument("--"+name, required=True)
     six_infer.add_argument("--resume", action="store_true")
+    six_infer.add_argument("--regional-features")
+    six_infer.add_argument("--mixed-plan")
     six_metrics = sub.add_parser("six-task-metrics")
     _dataset_args(six_metrics)
     for name in ("protocol", "predictions", "output"): six_metrics.add_argument("--"+name, required=True)
     six_compare = sub.add_parser("six-task-compare")
     for name in ("base", "candidate", "output"): six_compare.add_argument("--"+name, required=True)
+    six_compare.add_argument("--ablation", action="store_true")
     args = parser.parse_args(argv)
     if args.command == "build-data":
         result = build_data(args.geometry_dataset, args.tables, args.support, args.output)
     elif args.command == "audit":
         result = audit_data(ReasoningDataset(args.dataset, args.geometry_dataset), args.tables, args.support)
+    elif args.command == "build-mixed-plan":
+        from .mixed import build_plan
+        dataset = ReasoningDataset(args.dataset, args.geometry_dataset, "train")
+        updates = args.updates if args.updates is not None else math.ceil(len(dataset.requests) / 4)
+        result = build_plan(dataset, args.replay_source, args.output, seed=args.seed, updates=updates)
     elif args.command in ("sft", "grpo"):
         from ..b3 import device_lease
         from .trainer import train
@@ -111,22 +137,57 @@ def main(argv=None):
         if args.device == "cpu" and not recipe["engineering"]:
             raise ValueError("formal training requires CUDA; CPU is for engineering verification")
         dataset = ReasoningDataset(args.dataset, args.geometry_dataset, "train")
+        regional_config, mixed_plan, objective = None, None, None
+        if args.command == "sft":
+            if bool(args.regional_features) != bool(args.regional_config):
+                raise ValueError("regional SFT requires both --regional-features and --regional-config")
+            if args.regional_features:
+                from ..regional_data import RegionalDataset
+                from ..regional_model import RegionalConfig
+                config = read_json(args.regional_config)
+                if config.pop("schema", None) != "b4dl-regional-config-v1":
+                    raise ValueError("invalid regional model configuration")
+                regional_config = RegionalConfig(**config)
+                dataset = RegionalDataset(dataset, args.regional_features)
+            if bool(args.mixed_plan) != bool(args.supervision_config):
+                raise ValueError("mixed SFT requires both --mixed-plan and --supervision-config")
+            if args.mixed_plan:
+                from .mixed import MixedPlan
+                from .supervision import validate_objective
+                mixed_plan = MixedPlan(args.mixed_plan, dataset)
+                objective = validate_objective(read_json(args.supervision_config))
         with device_lease(args.device, args.gpu_lock):
             result = train(dataset, args.baseline, args.preparation, args.output, args.command, recipe,
-                           device=args.device, sft_checkpoint=getattr(args, "sft_checkpoint", None), resume=args.resume)
+                           device=args.device, sft_checkpoint=getattr(args, "sft_checkpoint", None),
+                           resume=args.resume, regional_config=regional_config, mixed_plan=mixed_plan, objective=objective)
     elif args.command in ("infer", "six-task-infer"):
         from ..b3 import device_lease
         from .evaluation import infer, infer_six_task, load_model, load_original_model
         dataset = ReasoningDataset(args.dataset, args.geometry_dataset, args.split if args.command == "infer" else None)
+        if args.regional_features:
+            if args.original_b3:
+                raise ValueError("original B3 uses its historical feature representation")
+            from ..regional_data import RegionalDataset
+            dataset = RegionalDataset(dataset, args.regional_features)
+        mixed_plan = None
+        if args.mixed_plan:
+            if args.original_b3:
+                raise ValueError("original B3 has no mixed-training plan")
+            from .mixed import MixedPlan
+            mixed_plan = MixedPlan(args.mixed_plan, dataset)
         with device_lease(args.device, args.gpu_lock):
-            if args.command == "six-task-infer" and args.original_b3:
+            if args.original_b3:
                 tokenizer, model = load_original_model(dataset, args.baseline, args.preparation, args.device)
                 checkpoint_metadata = None
             else:
-                tokenizer, model, checkpoint_metadata = load_model(dataset, args.baseline, args.preparation, args.checkpoint, args.device)
+                tokenizer, model, checkpoint_metadata = load_model(dataset, args.baseline, args.preparation,
+                                                                   args.checkpoint, args.device, mixed_plan)
             if args.command == "infer":
-                result = infer(dataset, model, tokenizer, args.checkpoint, args.output, args.condition, args.seed,
-                               args.max_new_tokens, args.resume, checkpoint_metadata)
+                artifact = args.baseline if args.original_b3 else args.checkpoint
+                result = infer(dataset, model, tokenizer, artifact, args.output, args.condition, args.seed,
+                               args.max_new_tokens, args.resume, checkpoint_metadata,
+                               model_kind="original_b3" if args.original_b3 else "reasoning",
+                               baseline=args.baseline, preparation=args.preparation)
             else:
                 result = infer_six_task(dataset, model, tokenizer, args.baseline if args.original_b3 else args.checkpoint,
                                         args.protocol, args.output, args.resume, "original_b3" if args.original_b3 else "reasoning",
@@ -153,7 +214,8 @@ def main(argv=None):
         first, second = read_json(args.base), read_json(args.candidate)
         if not args.allow_incomplete and (not first.get("complete_prediction_set") or not second.get("complete_prediction_set")):
             raise ValueError("comparison requires completed prediction sets; use --allow-incomplete only for diagnostics")
-        result = compare_reports(first, second, mode="intervention" if args.intervention else "models")
+        mode = "intervention" if args.intervention else "ablation" if args.ablation else "original_b3" if args.original_b3 else "models"
+        result = compare_reports(first, second, mode=mode)
         result["complete_prediction_sets"] = bool(first.get("complete_prediction_set") and second.get("complete_prediction_set"))
         if Path(args.output).exists(): raise FileExistsError(args.output)
         write_json(args.output, result)
@@ -167,7 +229,7 @@ def main(argv=None):
         result = six_task_metrics(dataset, args.protocol, args.predictions, args.output)
     else:
         from .evaluation import compare_six_task_metrics
-        result = compare_six_task_metrics(args.base, args.candidate)
+        result = compare_six_task_metrics(args.base, args.candidate, mode="ablation" if args.ablation else "models")
         if Path(args.output).exists(): raise FileExistsError(args.output)
         write_json(args.output, result)
     display = {key: value for key, value in result.items() if key != "rows"} if isinstance(result, dict) else result

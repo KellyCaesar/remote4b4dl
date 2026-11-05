@@ -36,7 +36,7 @@ def sequence_batch(model, tokenizer, items, completions=None):
         mask[i, :len(row)] = 1
         truth[i, :len(row)] = torch.tensor(labels[i], device=device)
     frames = {k: v.to(device) for k, v in collate_frames(items).items()}
-    check_context(model, ids, mask, frames["frame_valid_mask"])
+    check_context(model, ids, mask, frames["frame_valid_mask"], regional=frames)
     batch = {"input_ids": ids, "attention_mask": mask, "images": frames.pop("features"), **frames}
     if completions is not None:
         batch["labels"] = truth
@@ -73,7 +73,7 @@ def expanded_log_probs(model, batch):
     with padding_side(base, "right"):
         _, positions, attention, _, embeds, labels = base.prepare_inputs_labels_for_multimodal(
             batch["input_ids"], None, batch["attention_mask"], None, batch["labels"],
-            batch["images"], **{key: batch[key] for key in FRAME_KEYS})
+            batch["images"], **{key: batch.get(key) for key in FRAME_KEYS})
     expected = batch["labels"].ne(IGNORE_INDEX).sum(-1)
     if labels is None or not torch.equal(labels.ne(IGNORE_INDEX).sum(-1), expected):
         raise ValueError("multimodal expansion changed completion token coverage")
@@ -152,7 +152,8 @@ def reference_policy(model):
 
 def extension_state(model):
     state = {name: p.detach().cpu().clone() for name, p in model.named_parameters()
-             if ".frame_adapter." in name or ".mm_projector." in name or ".lora_" in name}
+             if any(key in name for key in (".frame_adapter.", ".regional_adapter.", ".numeric_head.",
+                                            ".mm_projector.", ".lora_"))}
     if not state or any(not torch.isfinite(value).all() for value in state.values()):
         raise ValueError("missing or nonfinite extension state")
     return state
@@ -160,7 +161,8 @@ def extension_state(model):
 
 def restore_extension(model, state):
     current = {name: p for name, p in model.named_parameters()
-               if ".frame_adapter." in name or ".mm_projector." in name or ".lora_" in name}
+               if any(key in name for key in (".frame_adapter.", ".regional_adapter.", ".numeric_head.",
+                                              ".mm_projector.", ".lora_"))}
     if set(current) != set(state):
         raise ValueError("extension parameter set mismatch")
     with torch.no_grad():

@@ -53,17 +53,33 @@ def compare_training(left, right):
             raise ValueError("GRPO controls require matched training recipe, budget and environment")
 
 
-def load_model(dataset, baseline, preparation, checkpoint, device):
+def load_model(dataset, baseline, preparation, checkpoint, device, mixed_plan=None):
     import torch
     from .policy import activate_adapter, add_reference_adapter, load_checkpoint
     from .trainer import implementation_identity, prepare_model
     meta = torch.load(checkpoint, map_location="cpu", weights_only=True)
     if meta.get("schema") != "b4dl-reasoning-checkpoint-v1" or meta.get("stage") not in ("sft", "grpo"):
         raise ValueError("invalid reasoning model checkpoint")
-    tokenizer, model, options = prepare_model(dataset, baseline, preparation, device, meta["recipe"]["lora_rank"])
+    regional_options = meta["identity"]["common"]["options"].get("regional")
+    regional_manifest = getattr(dataset, "regional_manifest", None)
+    if (regional_options is None) != (regional_manifest is None):
+        raise ValueError("regional checkpoint and feature dataset must be supplied together")
+    regional_config = None
+    if regional_options is not None:
+        from ..regional_model import RegionalConfig
+        regional_config = RegionalConfig(**regional_options)
+    objective = meta["identity"]["common"]["options"].get("supervision")
+    if (objective is None) != (mixed_plan is None):
+        raise ValueError("mixed checkpoint requires its matched training plan")
+    tokenizer, model, options = prepare_model(dataset, baseline, preparation, device,
+                                               meta["recipe"]["lora_rank"], regional_config, objective)
     common = {"baseline_sha256": sha256(baseline), "preparation_sha256": sha256(preparation),
               "reasoning_dataset_id": dataset.manifest["dataset_id"], "implementation": implementation_identity(),
               "reward_version": REWARD_VERSION, "options": options}
+    if regional_manifest is not None:
+        common["regional_dataset_id"] = regional_manifest["dataset_id"]
+    if mixed_plan is not None:
+        common["mixed_plan_id"] = mixed_plan.manifest["plan_id"]
     if meta["identity"]["common"] != common:
         raise ValueError("inference assets do not match checkpoint")
     if meta["stage"] == "grpo":
@@ -98,7 +114,8 @@ def load_original_model(dataset, baseline, preparation, device):
 
 
 def infer(dataset, model, tokenizer, checkpoint, output, condition="identity", seed=42,
-          max_new_tokens=512, resume=False, checkpoint_metadata=None):
+          max_new_tokens=512, resume=False, checkpoint_metadata=None, *,
+          model_kind="reasoning", baseline=None, preparation=None):
     import torch
     from .trainer import sample_one
     if not dataset.requests or len({r["split"] for r in dataset.requests}) != 1 or type(max_new_tokens) is not int or max_new_tokens < 1:
@@ -109,17 +126,31 @@ def infer(dataset, model, tokenizer, checkpoint, output, condition="identity", s
     output.mkdir(parents=True, exist_ok=resume)
     controls = {r["request_id"]: r for r in control_plan(dataset.geometry, condition, seed)}
     checkpoint_hash = sha256(checkpoint)
-    if checkpoint_metadata is None:
-        checkpoint_metadata = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    lineage = checkpoint_lineage(checkpoint_metadata, checkpoint_hash, dataset.manifest["dataset_id"])
+    if model_kind == "original_b3":
+        from .trainer import implementation_identity
+        if (baseline is None or preparation is None or checkpoint_hash != sha256(baseline)
+                or checkpoint_metadata is not None or getattr(dataset, "regional_manifest", None) is not None):
+            raise ValueError("original B3 inference requires its baseline and historical features")
+        common = {"baseline_sha256": checkpoint_hash, "preparation_sha256": sha256(preparation),
+                  "reasoning_dataset_id": dataset.manifest["dataset_id"], "implementation": implementation_identity(),
+                  "reward_version": REWARD_VERSION, "options": {"arm": "original_b3"}}
+        lineage, training = {"common": common, "sft_origin_sha256": None}, None
+    elif model_kind == "reasoning":
+        if checkpoint_metadata is None:
+            checkpoint_metadata = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        lineage = checkpoint_lineage(checkpoint_metadata, checkpoint_hash, dataset.manifest["dataset_id"])
+        training = checkpoint_training(checkpoint_metadata)
+    else:
+        raise ValueError("unknown reasoning model kind")
     run = {"schema": "b4dl-reasoning-inference-v1", "dataset_id": dataset.manifest["dataset_id"],
            "split": dataset.requests[0]["split"], "condition": condition, "seed": seed,
-           "checkpoint_sha256": checkpoint_hash, "lineage": lineage,
-           "training": checkpoint_training(checkpoint_metadata), "max_new_tokens": max_new_tokens,
+           "model_kind": model_kind, "checkpoint_sha256": checkpoint_hash, "lineage": lineage,
+           "training": training, "max_new_tokens": max_new_tokens,
            "decoding": "greedy", "reward_version": REWARD_VERSION}
     from ..integration import language_model
     from ..runtime import runtime_identity
     from .trainer import numerics_identity
+    run["observation_head"] = hasattr(language_model(model).get_model(), "numeric_head")
     run["runtime"] = runtime_identity(language_model(model))
     run["device"] = str(language_model(model).get_input_embeddings().weight.device)
     run["dtype"] = str(language_model(model).get_input_embeddings().weight.dtype)
@@ -131,7 +162,7 @@ def infer(dataset, model, tokenizer, checkpoint, output, condition="identity", s
         bind_run(output/"run.json", run, resume, [path, output/"completion.json"])
         if verify_completion(output, completion, {"predictions_sha256": path}):
             validate_predictions(dataset.requests, read_jsonl(path), complete=True)
-            return completion
+            return read_json(output/"completion.json")
         existing = recover_jsonl(path, lambda rows: validate_predictions(dataset.requests, rows))
         for request in dataset.requests[len(existing):]:
             control = controls[request["request_id"]]
@@ -139,10 +170,14 @@ def infer(dataset, model, tokenizer, checkpoint, output, condition="identity", s
                 prediction = {"text": "", "status": "unavailable", "generated_tokens": 0,
                               "generation_seconds": None, "unavailable_reason": control["status"]}
             else:
-                sample = sample_one(model, tokenizer, dataset.model_input(request, control), max_new_tokens,
-                                    do_sample=False)
+                item = dataset.model_input(request, control)
+                sample = sample_one(model, tokenizer, item, max_new_tokens, do_sample=False)
                 prediction = {"text": sample["text"], "status": sample["status"], "generated_tokens": len(sample["ids"]),
                               "generation_seconds": sample.get("generation_seconds")}
+                if run["observation_head"]:
+                    from .supervision import predict_observations
+                    with torch.no_grad():
+                        prediction["observation_head"] = predict_observations(model, tokenizer, item, request)
             prediction.update(request_id=request["request_id"], input_fingerprint=request["input_fingerprint"])
             append_jsonl(path, [prediction])
         validate_predictions(dataset.requests, read_jsonl(path), complete=True)
@@ -199,10 +234,19 @@ def evaluate(dataset, predictions, run, repetitions=2000):
             raise ValueError("invalid generation timing")
         status = pred["status"] if pred else "missing"
         score = score_trace(request, dataset.targets[request["request_id"]], pred["text"] if pred else "", status)
+        observation = pred.get("observation_head") if pred else None
+        if observation is not None:
+            from .supervision import observation_rule_answer
+            if (not run.get("observation_head") or not isinstance(observation, dict)
+                    or set(observation) != {"values", "rule_answer"} or not isinstance(observation["values"], dict)
+                    or observation_rule_answer(request, observation["values"]) != observation["rule_answer"]):
+                raise ValueError("invalid observation-head prediction")
+        elif run.get("observation_head") and status not in ("missing", "unavailable"):
+            raise ValueError("observation-head prediction missing")
         rows.append({"request_id": request["request_id"], "scene_id": request["scene_id"],
                      "task": request["task"], "truth": dataset.targets[request["request_id"]]["answer"],
                      "status": status, "generated_tokens": pred.get("generated_tokens", 0) if pred else 0,
-                     "generation_seconds": elapsed, **score})
+                     "generation_seconds": elapsed, "observation_head": observation, **score})
     by_task = defaultdict(list)
     for row in rows:
         by_task[row["task"]].append(row)
@@ -210,6 +254,37 @@ def evaluate(dataset, predictions, run, repetitions=2000):
               "by_task": {task: {**summarize(values), "scene_bootstrap_accuracy": scene_interval(values, repetitions=repetitions)}
                           for task, values in sorted(by_task.items())},
               "scene_bootstrap_accuracy": scene_interval(rows, repetitions=repetitions), "rows": rows}
+    if run.get("observation_head"):
+        from statistics import median
+        from .protocol import parse_trace
+        numerical, agreement, rule_correct = defaultdict(list), [], []
+        for request, row in zip(dataset.requests, rows):
+            observation = row["observation_head"]
+            if observation is None:
+                continue
+            truth = dataset.targets[request["request_id"]]["trace"]["steps"][0]["value"]
+            for key, value in observation["values"].items():
+                error = abs(value - truth[key])
+                if not math.isfinite(error):
+                    raise ValueError("observation error exceeds numeric range")
+                correct = math.floor(value + .5) == truth[key] if key == "count" else error < 1.
+                numerical[key].append((error, correct))
+            rule_correct.append(observation["rule_answer"] == row["truth"])
+            if row["valid"]:
+                agreement.append(observation["rule_answer"] == row["answer"])
+                generated = parse_trace(indexed[request["request_id"]]["text"], request)["steps"][0]["value"]
+                row["head_generated_absolute_difference"] = {
+                    key: abs(observation["values"][key] - generated[key]) for key in generated}
+                if not all(math.isfinite(value) for value in row["head_generated_absolute_difference"].values()):
+                    raise ValueError("head/generated difference exceeds numeric range")
+        report["observation_head"] = {"available": len(rule_correct), "requested": len(rows),
+            "rule_answer_accuracy": _mean([float(value) for value in rule_correct]),
+            "valid_generated_answers": len(agreement),
+            "generated_answer_agreement": _mean([float(value) for value in agreement]),
+            "numeric": {key: {"n": len(values), "mae": _mean([error for error, _ in values]),
+                "median_absolute_error": median(error for error, _ in values),
+                "exact_count_rate" if key == "count" else "within_1m_rate": _mean([float(ok) for _, ok in values])}
+                for key, values in sorted(numerical.items())}}
     if hasattr(dataset, "geometry"):
         index = unique_index(rows, "request_id")
         parents = [dataset.parent[r["request_id"]] for r in dataset.requests]
@@ -234,23 +309,60 @@ def evaluate(dataset, predictions, run, repetitions=2000):
     return report
 
 
+def validate_ablation_lineage(first, second):
+    """Allow explicitly different model options while retaining matched assets and budget."""
+    lineages = [row.get("lineage") for row in (first, second)]
+    if any(not isinstance(lineage, dict) or not isinstance(lineage.get("common"), dict) for lineage in lineages):
+        raise ValueError("ablation requires complete checkpoint lineages")
+    commons = [lineage["common"] for lineage in lineages]
+    keys = ("baseline_sha256", "preparation_sha256", "reasoning_dataset_id", "implementation", "reward_version")
+    if any(not commons[0].get(key) or commons[0].get(key) != commons[1].get(key) for key in keys):
+        raise ValueError("ablation requires matched baseline, dataset, implementation and reward")
+    if commons[0].get("mixed_plan_id") != commons[1].get("mixed_plan_id"):
+        raise ValueError("ablation requires the same mixed training plan")
+    feature_ids = [common.get("regional_dataset_id") for common in commons]
+    if all(feature_ids) and feature_ids[0] != feature_ids[1]:
+        raise ValueError("ablation regional datasets disagree")
+    training = [row.get("training") for row in (first, second)]
+    if any(not isinstance(row, dict) or row.get("stage") != "sft" for row in training):
+        raise ValueError("ablation requires recorded SFT training")
+    for key in ("recipe", "step", "execution", "planned_full_budget"):
+        if training[0].get(key) != training[1].get(key):
+            raise ValueError("ablation requires matched training recipe, budget and environment")
+    return {"base_options": commons[0].get("options"), "candidate_options": commons[1].get("options"),
+            "base_regional_dataset_id": feature_ids[0], "candidate_regional_dataset_id": feature_ids[1]}
+
+
 def compare_reports(base, candidate, repetitions=2000, mode="models"):
-    if mode not in ("models", "intervention"):
+    if mode not in ("models", "intervention", "ablation", "original_b3"):
         raise ValueError("unknown comparison mode")
     keys = ("dataset_id", "split", "seed", "max_new_tokens", "decoding", "reward_version", "runtime", "device", "dtype", "numerics", "gpu_name", "lineage")
     required = set(keys) | {"schema", "condition", "checkpoint_sha256", "training"}
     for run in (base["run"], candidate["run"]):
         if (not required <= set(run) or run["schema"] != "b4dl-reasoning-inference-v1"
-                or not run["lineage"] or not run["runtime"] or not run["checkpoint_sha256"]):
+                or not isinstance(run["lineage"], dict) or not run["lineage"]
+                or not run["runtime"] or not run["checkpoint_sha256"]):
             raise ValueError("paired comparisons require complete runtime and checkpoint lineage")
-    if any(base["run"].get(key) != candidate["run"].get(key) for key in keys):
+    matched_keys = tuple(key for key in keys if mode not in ("ablation", "original_b3") or key != "lineage")
+    if any(base["run"].get(key) != candidate["run"].get(key) for key in matched_keys):
         raise ValueError("paired comparisons require identical inputs and conditions")
     first_run, second_run = base["run"], candidate["run"]
-    if first_run["training"] is None or second_run["training"] is None:
-        raise ValueError("model comparisons require recorded training identity")
-    compare_training(first_run["training"], second_run["training"])
-    if mode == "models" and first_run.get("condition") != second_run.get("condition"):
+    if mode == "original_b3":
+        commons = [run["lineage"].get("common", {}) for run in (first_run, second_run)]
+        matched = ("baseline_sha256", "preparation_sha256", "reasoning_dataset_id", "implementation", "reward_version")
+        if (first_run.get("model_kind") != "original_b3" or second_run.get("model_kind") != "reasoning"
+                or first_run["training"] is not None or not isinstance(second_run["training"], dict)
+                or first_run["checkpoint_sha256"] != commons[0].get("baseline_sha256")
+                or any(not commons[0].get(key) or commons[0].get(key) != commons[1].get(key) for key in matched)):
+            raise ValueError("original B3 comparison requires a matched baseline and trained checkpoint")
+        compare_training(second_run["training"], second_run["training"])
+    else:
+        if first_run["training"] is None or second_run["training"] is None:
+            raise ValueError("model comparisons require recorded training identity")
+        compare_training(first_run["training"], second_run["training"])
+    if mode in ("models", "ablation", "original_b3") and first_run.get("condition") != second_run.get("condition"):
         raise ValueError("model comparisons require the same input condition")
+    differences = validate_ablation_lineage(first_run, second_run) if mode == "ablation" else None
     if mode == "intervention" and (first_run.get("condition") != "identity"
             or second_run.get("condition") not in ("zero", "repeat_first", "shuffle_features", "cross_scene")
             or not first_run.get("checkpoint_sha256")
@@ -272,6 +384,7 @@ def compare_reports(base, candidate, repetitions=2000, mode="models"):
     for row in rows: grouped[row["task"]].append(row)
     available = [row for row in rows if row["available"]]
     return {"comparison_mode": mode, "base_run": first_run, "candidate_run": second_run,
+            "ablation_differences": differences,
             "n": len(rows), "accuracy_delta": _mean([r["delta"] for r in rows]),
             "scene_bootstrap_delta": scene_interval(rows, "delta", repetitions),
             "available_pairs": {"n": len(available), "excluded_unavailable_or_missing": len(rows)-len(available),
@@ -485,7 +598,9 @@ def six_task_metrics(dataset, protocol_path, prediction_path, output):
     return receipt
 
 
-def compare_six_task_metrics(base_dir, candidate_dir):
+def compare_six_task_metrics(base_dir, candidate_dir, mode="models"):
+    if mode not in ("models", "ablation"):
+        raise ValueError("unknown six-task comparison mode")
     base_dir, candidate_dir = Path(base_dir), Path(candidate_dir)
     left_receipt, right_receipt = (read_json(path/"completion.json") for path in (base_dir, candidate_dir))
     if (left_receipt.get("status") != "six_task_metrics_complete" or right_receipt.get("status") != "six_task_metrics_complete"
@@ -498,10 +613,11 @@ def compare_six_task_metrics(base_dir, candidate_dir):
     if (six_task_comparison_identity(left_run) != six_task_comparison_identity(right_run)
             or left_run["protocol_id"] != left_receipt["protocol_id"]
             or right_run["protocol_id"] != right_receipt["protocol_id"]
-            or left_run["model_kind"] == right_run["model_kind"] == "reasoning"
+            or mode == "models" and left_run["model_kind"] == right_run["model_kind"] == "reasoning"
             and left_run["lineage"] != right_run["lineage"]):
         raise ValueError("six-task comparison requires matched runtime, B3 assets and SFT origin")
     compare_training(left_run.get("training"), right_run.get("training"))
+    differences = validate_ablation_lineage(left_run, right_run) if mode == "ablation" else None
     first, second = (read_json(path/"metrics.json") for path in (base_dir, candidate_dir))
     if first["metric_backend"] != second["metric_backend"] or set(first["per_task_metrics"]) != set(second["per_task_metrics"]):
         raise ValueError("six-task metric backends or tasks differ")
@@ -512,6 +628,7 @@ def compare_six_task_metrics(base_dir, candidate_dir):
         changes[task] = {key: {"base": a[key], "candidate": b[key],
                                "delta": b[key]-a[key] if a[key] is not None and b[key] is not None else None} for key in a}
     return {"protocol_id": left_receipt["protocol_id"], "requests": left_receipt["requests"],
+            "comparison_mode": mode, "ablation_differences": differences,
             "base_model": {"kind": left_run["model_kind"], "artifact_sha256": left_run["model_artifact_sha256"],
                            "training": left_run.get("training"),
                            "prediction_statuses": left_receipt.get("prediction_statuses")},

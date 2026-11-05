@@ -37,6 +37,11 @@ class VTimeLLMMetaForCausalLM(ABC):
         frame_times=None,
         frame_geometry=None,
         frame_valid_mask=None,
+        cell_features=None,
+        cell_xyz=None,
+        cell_indices=None,
+        cell_valid_mask=None,
+        ego_from_sst=None,
     ):
         # print(position_ids, attention_mask)
         # if past_key_values:
@@ -58,10 +63,14 @@ class VTimeLLMMetaForCausalLM(ABC):
                 position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
 
-        core_frames = any(x is not None for x in (frame_times, frame_geometry, frame_valid_mask)) or getattr(self.get_model(), 'frame_adapter', None) is not None
+        core_frames = (any(x is not None for x in (frame_times, frame_geometry, frame_valid_mask))
+                       or getattr(self.get_model(), 'frame_adapter', None) is not None
+                       or getattr(self.get_model(), 'regional_adapter', None) is not None)
         if core_frames:
             from b4dl_core.integration import project_frames
-            image_features = project_frames(self, images, frame_times, frame_geometry, frame_valid_mask)
+            image_features = project_frames(self, images, frame_times, frame_geometry, frame_valid_mask,
+                cell_features=cell_features, cell_xyz=cell_xyz, cell_indices=cell_indices,
+                cell_valid_mask=cell_valid_mask, ego_from_sst=ego_from_sst)
         elif type(images) is list:
             concat_images = torch.cat([image for image in images], dim=0)
             image_features = self.get_model().mm_projector(concat_images)

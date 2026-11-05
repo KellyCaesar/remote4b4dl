@@ -8,7 +8,8 @@ import torch
 from .inputs import collate_frames
 from .temporal import FrameTemporalAdapter, TemporalConfig, validate_frames
 
-FRAME_KEYS = ("frame_times", "frame_geometry", "frame_valid_mask")
+REGIONAL_KEYS = ("cell_features", "cell_xyz", "cell_indices", "cell_valid_mask", "ego_from_sst")
+FRAME_KEYS = ("frame_times", "frame_geometry", "frame_valid_mask") + REGIONAL_KEYS
 
 
 def language_model(model):
@@ -22,7 +23,7 @@ def attach(model, arm="A3", temporal=None, lora_rank=0):
         raise ValueError("invalid ablation arm/LoRA rank")
     if isinstance(model, PeftModel) or any(isinstance(m, BaseTunerLayer) for m in model.modules()):
         raise ValueError("attach only to a restored and merged original B3")
-    if hasattr(model.get_model(), "frame_adapter"):
+    if hasattr(model.get_model(), "frame_adapter") or hasattr(model.get_model(), "regional_adapter"):
         raise ValueError("attach only to a restored and merged original B3")
     # PEFT can leave configuration metadata after merge_and_unload.
     if hasattr(model, "peft_config"):
@@ -50,13 +51,37 @@ def attach(model, arm="A3", temporal=None, lora_rank=0):
     return model, options
 
 
-def project_frames(model, images, times, poses, valid):
+def attach_regional(model, config, lora_rank=0):
+    from .regional_model import RegionalProjector
+    model, options = attach(model, "A1", lora_rank=lora_rank)
+    core = language_model(model).get_model()
+    core.regional_adapter = RegionalProjector(config, core.mm_projector.out_features).to(
+        device=core.mm_projector.weight.device, dtype=torch.float32)
+    options.update(arm="regional", regional=config.as_dict())
+    return model, options
+
+
+def project_frames(model, images, times, poses, valid, *, cell_features=None, cell_xyz=None,
+                   cell_indices=None, cell_valid_mask=None, ego_from_sst=None):
     if not isinstance(images, torch.Tensor) or times is None:
         raise ValueError("core B3 requires dense [B,T,768] features and explicit frame_times")
     if valid is None:
         valid = torch.ones(images.shape[:2], dtype=torch.bool, device=images.device)
     core = model.get_model()
     adapter = getattr(core, "frame_adapter", None)
+    regional = getattr(core, "regional_adapter", None)
+    cell_values = (cell_features, cell_xyz, cell_indices, cell_valid_mask, ego_from_sst)
+    if regional is None and any(value is not None for value in cell_values):
+        raise ValueError("regional cells require an attached regional projector")
+    if regional is not None:
+        if adapter is not None or any(value is None for value in cell_values):
+            raise ValueError("regional projector requires complete cells and no frame adapter")
+        dtype = model.get_input_embeddings().weight.dtype
+        with torch.autocast(device_type=images.device.type, enabled=False):
+            values, token_mask = regional(images.float(), times, poses, valid, cell_features.float(),
+                cell_xyz.float(), cell_indices, cell_valid_mask, ego_from_sst, core.mm_projector,
+                output_dtype=dtype)
+        return [values[i][token_mask[i]] for i in range(len(values))]
     validate_frames(images, times, poses, valid, geometry=adapter is not None and adapter.config.use_geometry)
     with torch.autocast(device_type=images.device.type, enabled=False):
         values = images
@@ -84,13 +109,22 @@ def padding_side(model, side):
             config.tokenizer_padding_side = previous
 
 
-def check_context(model, ids, attention, valid, extra=0):
+def check_context(model, ids, attention, valid, extra=0, regional=None):
     from vtimellm.constants import IMAGE_TOKEN_INDEX
     if ids.ndim != 2 or attention.shape != ids.shape or valid.shape[0] != ids.shape[0]:
         raise ValueError("incompatible text/frame batch axes")
     if not ((ids == IMAGE_TOKEN_INDEX) & attention.bool()).sum(-1).eq(1).all():
         raise ValueError("exactly one visual slot per core request required")
-    lengths = attention.sum(-1) - 1 + valid.sum(-1)
+    adapter = getattr(language_model(model).get_model(), "regional_adapter", None)
+    if adapter is not None:
+        from .regional_model import visual_token_mask
+        if regional is None or any(regional.get(key) is None for key in REGIONAL_KEYS):
+            raise ValueError("regional context check requires complete cell tensors")
+        visual = visual_token_mask(valid, regional["cell_indices"], regional["cell_valid_mask"],
+                                   adapter.config.tokens_per_frame).sum((1, 2))
+    else:
+        visual = valid.sum(-1)
+    lengths = attention.sum(-1) - 1 + visual
     limits = [getattr(language_model(model).config, name, None)
               for name in ("max_position_embeddings", "tokenizer_model_max_length")]
     if any(limit is not None and int(lengths.max()) + extra > limit for limit in limits):
@@ -116,7 +150,7 @@ def expand_generation(model, inputs, kwargs):
     budget = kwargs.get("max_new_tokens")
     if type(budget) is not int or budget < 1:
         raise ValueError("explicit positive max_new_tokens required for core generation")
-    lengths = check_context(model, inputs, attention, valid, budget)
+    lengths = check_context(model, inputs, attention, valid, budget, frames)
     if kwargs.pop("position_ids", None) is not None or kwargs.pop("cache_position", None) is not None:
         raise ValueError("core generation computes positions after visual expansion")
     with padding_side(model, "left"):
@@ -164,7 +198,7 @@ def batch_inputs(model, tokenizer, items, targets=None):
         attention[i, :len(row)] = 1
         truth[i, :len(row)] = torch.tensor(labels[i], device=device)
     tensors = {k: v.to(device) for k, v in collate_frames(items).items()}
-    check_context(model, ids, attention, tensors["frame_valid_mask"])
+    check_context(model, ids, attention, tensors["frame_valid_mask"], regional=tensors)
     batch = {"input_ids": ids, "attention_mask": attention, "images": tensors.pop("features"), **tensors}
     if targets is not None:
         batch["labels"] = truth

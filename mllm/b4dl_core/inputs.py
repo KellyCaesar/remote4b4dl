@@ -176,4 +176,30 @@ def collate_frames(items):
         times[i, :size] = torch.as_tensor(item["frame_times"])
         poses[i, :size] = torch.as_tensor(item["frame_geometry"])
         valid[i, :size] = True
-    return {"features": features, "frame_times": times, "frame_geometry": poses, "frame_valid_mask": valid}
+    result = {"features": features, "frame_times": times, "frame_geometry": poses, "frame_valid_mask": valid}
+    keys = ("cell_features", "cell_xyz", "cell_indices", "cell_valid_mask", "ego_from_sst")
+    present = [any(key in item for key in keys) for item in items]
+    if any(present):
+        if not all(all(key in item for key in keys) for item in items):
+            raise ValueError("regional batch requires complete cells for every item")
+        cells = max(item["cell_features"].shape[1] for item in items)
+        cell_width = items[0]["cell_features"].shape[-1]
+        result.update(cell_features=torch.zeros(len(items), n, cells, cell_width),
+            cell_xyz=torch.zeros(len(items), n, cells, 3),
+            cell_indices=torch.zeros(len(items), n, cells, dtype=torch.long),
+            cell_valid_mask=torch.zeros(len(items), n, cells, dtype=torch.bool),
+            ego_from_sst=torch.eye(4, dtype=torch.float64).repeat(len(items), n, 1, 1))
+        for i, item in enumerate(items):
+            size, count = item["cell_features"].shape[:2]
+            if (size != len(item["features"]) or item["cell_features"].shape != (size, count, cell_width)
+                    or item["cell_xyz"].shape != (size, count, 3)
+                    or item["cell_indices"].shape != (size, count)
+                    or item["cell_valid_mask"].shape != (size, count)
+                    or item["ego_from_sst"].shape != (size, 4, 4)
+                    or not np.issubdtype(item["cell_indices"].dtype, np.integer)
+                    or item["cell_valid_mask"].dtype != np.bool_):
+                raise ValueError("incompatible regional item shapes")
+            for key in keys[:4]:
+                result[key][i, :size, :count] = torch.as_tensor(item[key])
+            result["ego_from_sst"][i, :size] = torch.as_tensor(item["ego_from_sst"])
+    return result

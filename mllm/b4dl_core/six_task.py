@@ -3,13 +3,12 @@ import argparse
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from .b3 import chosen_config, device_lease, identity_for, load_original
 from .integration import attach, language_model, load_checkpoint
 from .inputs import GeometryDataset
-from .io import digest, read_json, read_jsonl, sha256, write_json, write_jsonl
+from .io import digest, read_json, read_jsonl, sha256, write_json
 from .resume import (append_jsonl, bind_run, output_lease, recover_jsonl,
                      validate_predictions, verify_completion)
 from .runtime import runtime_identity
@@ -49,6 +48,9 @@ def query_batch(model, tokenizer, dataset, row):
         'frame_times': torch.as_tensor(bundle['frame_times'], device=device)[None],
         'frame_geometry': torch.as_tensor(bundle['frame_geometry'], device=device)[None],
         'frame_valid_mask': torch.ones(1, len(bundle['features']), dtype=torch.bool, device=device)}
+    for key in ('cell_features', 'cell_xyz', 'cell_indices', 'cell_valid_mask', 'ego_from_sst'):
+        if key in bundle:
+            batch[key] = torch.as_tensor(bundle[key], device=device)[None]
     return batch
 
 

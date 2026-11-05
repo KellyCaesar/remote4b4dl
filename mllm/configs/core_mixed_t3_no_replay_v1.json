@@ -1,0 +1,11 @@
+{
+  "schema": "b4dl-mixed-objective-v1",
+  "segmented": true,
+  "numeric_weight": 0.2,
+  "pair_weight": 0.1,
+  "geometry_weight": 0.5,
+  "replay_weight": 0.0,
+  "trace_weight": 0.5,
+  "short_weight": 0.5,
+  "pair_margin": 0.5
+}

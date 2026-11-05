@@ -178,7 +178,7 @@ def sample_grpo(model, tokenizer, item, max_new_tokens):
     with torch.no_grad(), _precision(model), padding_side(base, "right"):
         _, positions, attention, _, embeds, labels = base.prepare_inputs_labels_for_multimodal(
             batch["input_ids"], None, batch["attention_mask"], None, batch["labels"],
-            batch["images"], **{key: batch[key] for key in FRAME_KEYS})
+            batch["images"], **{key: batch.get(key) for key in FRAME_KEYS})
         target_positions = labels[0].ne(IGNORE_INDEX).nonzero().flatten()
         if (len(target_positions) != max_new_tokens or int(target_positions[0]) < 1
                 or not torch.equal(target_positions, torch.arange(
@@ -280,6 +280,68 @@ def sft_update(model, tokenizer, rows, optimizer, max_new_tokens):
     return {"loss": sum(losses)/len(losses), "gradient_norm": _finish_update(model, optimizer)}
 
 
+def mixed_sft_update(model, tokenizer, geometry_rows, replay_rows, optimizer, recipe, objective, pair_type):
+    from torch.nn import functional as F
+    from .supervision import observation_loss, pair_regularizer, segmented_trace_loss, short_answer_scores
+    if len(geometry_rows) != 2 or len(replay_rows) != 2:
+        raise ValueError("mixed updates require two geometry and two replay rows")
+    optimizer.zero_grad(set_to_none=True)
+    model.train()
+    geometry_logs, observations, score_rows = [], [], []
+    for item, request, target in geometry_rows:
+        with _precision(model):
+            if objective["segmented"]:
+                trace, parts = segmented_trace_loss(model, tokenizer, item, request, target, recipe["max_new_tokens"])
+            else:
+                completion = teacher_completions(tokenizer, [target], recipe["max_new_tokens"])
+                batch = sequence_batch(model, tokenizer, [item], completion)
+                trace = model(**batch, use_cache=False).loss
+                parts = {}
+        if not torch.isfinite(trace):
+            raise FloatingPointError("nonfinite geometry trace loss")
+        (objective["geometry_weight"] * objective["trace_weight"] * trace / len(geometry_rows)).backward()
+        geometry_logs.append({"trace": float(trace.detach()), **parts})
+        if objective["numeric_weight"]:
+            numeric, prediction = observation_loss(model, tokenizer, item, request, target)
+            if not torch.isfinite(numeric):
+                raise FloatingPointError("nonfinite numeric observation loss")
+            (objective["geometry_weight"] * objective["numeric_weight"] * numeric / len(geometry_rows)).backward()
+            observations.append({"loss": float(numeric.detach()), "prediction": prediction})
+        with _precision(model):
+            score_rows.append(short_answer_scores(model, tokenizer, item, request, recipe["max_new_tokens"]))
+    short_losses = []
+    for (_, _, target), (options, scores) in zip(geometry_rows, score_rows):
+        if target["answer"] not in options:
+            raise ValueError("short answer is missing from model options")
+        label = torch.tensor([options.index(target["answer"])], dtype=torch.long, device=scores.device)
+        short_losses.append(F.cross_entropy(scores.unsqueeze(0).float(), label))
+    short = torch.stack(short_losses).mean()
+    pair = pair_regularizer([row[1] for row in geometry_rows], [row[2] for row in geometry_rows],
+                            score_rows, pair_type, objective["pair_margin"])
+    combined = objective["geometry_weight"] * objective["short_weight"] * short + objective["pair_weight"] * pair
+    if not torch.isfinite(combined):
+        raise FloatingPointError("nonfinite short-answer or pair loss")
+    combined.backward()
+    replay_losses = []
+    if objective["replay_weight"]:
+        for item, answer in replay_rows:
+            completion = tokenizer.encode(answer, add_special_tokens=False) + [tokenizer.eos_token_id]
+            if len(completion) > recipe["max_new_tokens"]:
+                raise ValueError("replay answer exceeds generation budget")
+            batch = sequence_batch(model, tokenizer, [item], [completion])
+            with _precision(model):
+                loss = model(**batch, use_cache=False).loss
+            if not torch.isfinite(loss):
+                raise FloatingPointError("nonfinite replay loss")
+            (objective["replay_weight"] * loss / len(replay_rows)).backward()
+            replay_losses.append(float(loss.detach()))
+    return {"trace": geometry_logs, "observations": observations, "short_loss": float(short.detach()),
+            "pair_loss": float(pair.detach()), "pair_type": pair_type,
+            "short_answer_forwards": sum(len(options) for options, _ in score_rows),
+            "replay_loss": sum(replay_losses) / len(replay_losses) if replay_losses else None,
+            "gradient_norm": _finish_update(model, optimizer)}
+
+
 def grpo_update(model, tokenizer, rows, optimizer, recipe):
     """Collect all groups before the update, then backpropagate serially."""
     optimizer.zero_grad(set_to_none=True)
@@ -331,7 +393,7 @@ def implementation_identity():
     return digest({"core": implementation_id(), "reasoning": {p.name: sha256(p) for p in sorted(root.glob("*.py"))}})
 
 
-def prepare_model(dataset, baseline_path, preparation_path, device, rank=16):
+def prepare_model(dataset, baseline_path, preparation_path, device, rank=16, regional_config=None, objective=None):
     from ..io import read_json
     lock, preparation = read_json(baseline_path), read_json(preparation_path)
     if lock["schema"] != "b4dl-core-baseline-v1" or preparation["baseline_checkpoint"] != lock["components"]["stage2"]["path"]:
@@ -344,7 +406,22 @@ def prepare_model(dataset, baseline_path, preparation_path, device, rank=16):
     tokenizer, original = load_original(lock, device)
     if device.startswith("cuda"):
         original.to(dtype=torch.bfloat16)
-    model, options = attach(original, "A3", chosen_config(preparation, "A3"), rank)
+    if regional_config is None:
+        model, options = attach(original, "A3", chosen_config(preparation, "A3"), rank)
+    else:
+        from ..integration import attach_regional
+        model, options = attach_regional(original, regional_config, rank)
+    if objective is not None:
+        from .supervision import ObservationHead, validate_objective
+        objective = validate_objective(objective)
+        if objective["numeric_weight"]:
+            if regional_config is None:
+                raise ValueError("numeric observation supervision requires regional features")
+            core = language_model(model).get_model()
+            core.numeric_head = ObservationHead(regional_config.width,
+                language_model(model).get_input_embeddings().weight.shape[-1], regional_config.heads).to(
+                    device=core.mm_projector.weight.device, dtype=torch.float32)
+        options["supervision"] = objective
     use_fp32_output_head(model)
     options["numeric_policy"] = "bf16-strict-reduction-fp32-head-v1"
     if any(isinstance(module, torch.nn.Dropout) and module.p for module in model.modules()):
@@ -362,19 +439,62 @@ def preflight_context(model, tokenizer, dataset, recipe):
     limits = [int(v) for v in limits if v is not None]
     if not limits:
         raise ValueError("model context limit is not declared")
-    maximum = 0
+    maximum, visual_counts = 0, {}
+    adapter = getattr(language_model(model).get_model(), "regional_adapter", None)
     for request in dataset.requests:
         target = dataset.targets[request["request_id"]]
         answer = teacher_completions(tokenizer, [target], recipe["max_new_tokens"])[0]
-        prompt = len(prompt_tokens(tokenizer, request["prompt"])) - 1 + request["feature_length"]
+        visual = request["feature_length"]
+        if adapter is not None and adapter.config.tokens_per_frame == 5:
+            scene_id = request["scene_id"]
+            if scene_id not in visual_counts:
+                from ..regional_model import visual_token_mask
+                scene = dataset.geometry.scene(scene_id)
+                valid = torch.ones(1, len(scene["features"]), dtype=torch.bool)
+                visual_counts[scene_id] = int(visual_token_mask(valid,
+                    torch.as_tensor(scene["cell_indices"])[None], torch.as_tensor(scene["cell_valid_mask"])[None], 5).sum())
+            visual = visual_counts[scene_id]
+        prompt = len(prompt_tokens(tokenizer, request["prompt"])) - 1 + visual
         maximum = max(maximum, prompt + max(len(answer), recipe["max_new_tokens"]))
         if maximum > min(limits):
             raise ValueError("reasoning prompt, visual tokens and generation budget exceed context")
     return {"max_expanded_with_generation": maximum, "context_limit": min(limits)}
 
 
+def preflight_replay_context(model, tokenizer, dataset, mixed_plan, recipe):
+    from ..integration import prompt_tokens
+    from ..regional_model import visual_token_mask
+    config = language_model(model).config
+    limits = [int(value) for value in (getattr(config, "max_position_embeddings", None),
+              getattr(config, "tokenizer_model_max_length", None)) if value is not None]
+    if not limits:
+        raise ValueError("model context limit is not declared")
+    adapter = getattr(language_model(model).get_model(), "regional_adapter", None)
+    used = {ident for step in mixed_plan.plan for ident in step["replay"]}
+    visual_counts, maximum = {}, 0
+    for ident in sorted(used, key=lambda key: mixed_plan.replay[key]["scene_id"]):
+        row = mixed_plan.replay[ident]
+        scene = row["scene_id"]
+        if scene not in visual_counts:
+            visual = dataset.geometry.manifest["scenes"][scene]["frames"]
+            if adapter is not None and adapter.config.tokens_per_frame == 5:
+                bundle = dataset.geometry.scene(scene)
+                valid = torch.ones(1, visual, dtype=torch.bool)
+                visual = int(visual_token_mask(valid, torch.as_tensor(bundle["cell_indices"])[None],
+                             torch.as_tensor(bundle["cell_valid_mask"])[None], 5).sum())
+            visual_counts[scene] = visual
+        completion = tokenizer.encode(row["answer"], add_special_tokens=False) + [tokenizer.eos_token_id]
+        if len(completion) > recipe["max_new_tokens"]:
+            raise ValueError("replay answer exceeds generation budget: " + ident)
+        length = len(prompt_tokens(tokenizer, row["prompt"])) - 1 + visual_counts[scene] + len(completion)
+        maximum = max(maximum, length)
+        if maximum > min(limits):
+            raise ValueError("replay prompt and visual tokens exceed context: " + ident)
+    return {"replay_unique_rows": len(used), "max_replay_expanded": maximum, "context_limit": min(limits)}
+
+
 def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, device="cuda:0",
-          sft_checkpoint=None, resume=None):
+          sft_checkpoint=None, resume=None, regional_config=None, mixed_plan=None, objective=None):
     """Run one frozen-recipe pass, or an explicitly bounded engineering run."""
     if stage not in ("sft", "grpo") or {r["split"] for r in dataset.requests} != {"train"}:
         raise ValueError("training requires a nonempty train split")
@@ -382,6 +502,22 @@ def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, de
         raise ValueError("GRPO requires a completed CoT SFT checkpoint")
     if stage == "sft" and sft_checkpoint:
         raise ValueError("SFT starts from the verified B3 baseline")
+    regional_manifest = getattr(dataset, "regional_manifest", None)
+    if (regional_config is None) != (regional_manifest is None):
+        raise ValueError("regional configuration and regional feature dataset must be supplied together")
+    if regional_config is not None and stage != "sft":
+        raise ValueError("regional training currently supports SFT")
+    if (mixed_plan is None) != (objective is None) or mixed_plan is not None and stage != "sft":
+        raise ValueError("mixed plan and objective require SFT and must be supplied together")
+    if mixed_plan is not None:
+        from .supervision import validate_objective
+        objective = validate_objective(objective)
+        if recipe["grad_accum"] != 4 or mixed_plan.manifest["seed"] != recipe["seed"]:
+            raise ValueError("mixed training requires effective batch four and matched seed")
+        if not recipe.get("engineering") and mixed_plan.manifest["updates"] != math.ceil(len(dataset.requests) / 4):
+            raise ValueError("formal mixed plan must match the geometry update budget")
+    if regional_manifest is not None and not recipe.get("engineering") and not regional_manifest["complete"]:
+        raise ValueError("formal regional training requires complete regional features")
     if Path(output).exists():
         raise FileExistsError("choose a new training output directory")
     if not recipe.get("engineering") and (dataset.geometry.manifest.get("usage") == "mini_engineering_validation"
@@ -390,11 +526,18 @@ def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, de
     random.seed(recipe["seed"]); np.random.seed(recipe["seed"]); torch.manual_seed(recipe["seed"])
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(recipe["seed"])
     reset_gpu_memory(device)
-    tokenizer, model, options = prepare_model(dataset, baseline_path, preparation_path, device, recipe["lora_rank"])
+    tokenizer, model, options = prepare_model(dataset, baseline_path, preparation_path, device,
+                                               recipe["lora_rank"], regional_config, objective)
     context = preflight_context(model, tokenizer, dataset, recipe)
+    if mixed_plan is not None:
+        context["replay"] = preflight_replay_context(model, tokenizer, dataset, mixed_plan, recipe)
     common = {"baseline_sha256": sha256(baseline_path), "preparation_sha256": sha256(preparation_path),
               "reasoning_dataset_id": dataset.manifest["dataset_id"], "implementation": implementation_identity(),
               "reward_version": REWARD_VERSION, "options": options}
+    if regional_manifest is not None:
+        common["regional_dataset_id"] = regional_manifest["dataset_id"]
+    if mixed_plan is not None:
+        common["mixed_plan_id"] = mixed_plan.manifest["plan_id"]
     if stage == "grpo":
         sft = load_checkpoint(sft_checkpoint, model, expected_stage="sft")
         receipt_path = Path(sft_checkpoint).parent/"completion.json"
@@ -409,7 +552,7 @@ def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, de
             raise ValueError("GRPO requires the matched completed SFT endpoint")
         add_reference_adapter(model)
     optimizer = _optimizer(model, recipe["sft_lr"] if stage == "sft" else recipe["grpo_lr"])
-    total = math.ceil(len(dataset.requests)/recipe["grad_accum"])
+    total = mixed_plan.manifest["updates"] if mixed_plan is not None else math.ceil(len(dataset.requests)/recipe["grad_accum"])
     max_updates = recipe.get("max_updates")
     stop = min(total, max_updates) if max_updates else total
     execution = {"runtime": runtime_identity(language_model(model)), "device": device,
@@ -435,11 +578,19 @@ def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, de
     try:
         for step in range(start, stop):
             started = time.perf_counter()
-            requests = [dataset.requests[i] for i in order[step*recipe["grad_accum"]:(step+1)*recipe["grad_accum"]]]
-            if stage == "sft":
+            if mixed_plan is not None:
+                planned = mixed_plan.plan[step]
+                requests = [mixed_plan.requests[ident] for ident in planned["geometry"]]
+                batch = [(dataset.model_input(r), r, dataset.targets[r["request_id"]]) for r in requests]
+                replay = [mixed_plan.replay_input(dataset, ident) for ident in planned["replay"]]
+                result = mixed_sft_update(model, tokenizer, batch, replay, optimizer, recipe, objective, planned["pair_type"])
+                result["replay_ids"] = planned["replay"]
+            elif stage == "sft":
+                requests = [dataset.requests[i] for i in order[step*recipe["grad_accum"]:(step+1)*recipe["grad_accum"]]]
                 batch = [(dataset.model_input(r), dataset.targets[r["request_id"]]) for r in requests]
                 result = sft_update(model, tokenizer, batch, optimizer, recipe["max_new_tokens"])
             else:
+                requests = [dataset.requests[i] for i in order[step*recipe["grad_accum"]:(step+1)*recipe["grad_accum"]]]
                 batch = [(dataset.model_input(r), r, dataset.targets[r["request_id"]]) for r in requests]
                 result = grpo_update(model, tokenizer, batch, optimizer, recipe)
             result.update(step=step+1, requests=[r["request_id"] for r in requests], seconds=time.perf_counter()-started)

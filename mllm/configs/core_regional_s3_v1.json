@@ -1,0 +1,15 @@
+{
+  "schema": "b4dl-regional-config-v1",
+  "input_width": 128,
+  "width": 768,
+  "heads": 8,
+  "layers": 2,
+  "ff_width": 1536,
+  "tokens_per_frame": 1,
+  "use_temporal": true,
+  "use_geometry": true,
+  "distance_scale_m": 10.0,
+  "time_scale_s": 4.0,
+  "radius_m": 10.0,
+  "neighbors": 8
+}
