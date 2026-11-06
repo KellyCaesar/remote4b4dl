@@ -19,7 +19,7 @@ root_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 from dataclasses import dataclass, field
 import logging
 import pathlib
-from typing import Dict, Optional, Sequence, List
+from typing import Dict, Optional
 
 import torch
 import transformers
@@ -42,9 +42,9 @@ sys.path.append(root_dir)
 from vtimellm import conversation as conversation_lib
 from vtimellm.train.vtimellm_trainer import VTimeLLMTrainer
 from vtimellm.train.dataset import make_supervised_data_module, DataArguments
+from vtimellm.train.lora_state import collect_lora_state
 from vtimellm.model import VTimeLLMLlamaForCausalLM, VTimeLLMChatGLMForCausalLM
 from vtimellm.model.builder import load_lora
-from vtimellm.mm_utils import print_trainable_parameters
 
 local_rank = None
 
@@ -126,28 +126,7 @@ def maybe_zero_3(param, ignore_status=False, name=None):
 
 # Borrowed from peft.utils.get_peft_model_state_dict
 def get_peft_state_maybe_zero_3(named_params, bias):
-    if bias == "none":
-        to_return = {k: t for k, t in named_params if "lora_" in k}
-    elif bias == "all":
-        to_return = {k: t for k, t in named_params if "lora_" in k or "bias" in k}
-    elif bias == "lora_only":
-        to_return = {}
-        maybe_lora_bias = {}
-        lora_bias_names = set()
-        for k, t in named_params:
-            if "lora_" in k:
-                to_return[k] = t
-                bias_name = k.split("lora_")[0] + "bias"
-                lora_bias_names.add(bias_name)
-            elif "bias" in k:
-                maybe_lora_bias[k] = t
-        for k, t in maybe_lora_bias:
-            if bias_name in lora_bias_names:
-                to_return[bias_name] = t
-    else:
-        raise NotImplementedError
-    to_return = {k: maybe_zero_3(v, name=k) for k, v in to_return.items()}
-    return to_return
+    return collect_lora_state(named_params, bias, maybe_zero_3)
 
 
 def get_peft_state_non_lora_maybe_zero_3(named_params, require_grad_only=True):
@@ -199,7 +178,7 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
                 os.makedirs(mm_projector_folder, exist_ok=True)
                 torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
             else:
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+                torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
         return
 
     if trainer.deepspeed:

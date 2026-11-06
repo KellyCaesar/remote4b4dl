@@ -11,6 +11,8 @@
 
 ## 原项目基础训练入口
 
+以下命令从 `mllm/` 目录执行。原论文是静态 3D 对齐、4D 时空理解两个训练阶段；数据文件名 `stage2` / `stage3` 的简单与复杂任务划分不等于额外的训练阶段。原项目入口与 upcore 从已核验 B3 继续的实验入口互相独立。
+
 Before running, please download [this file](https://huggingface.co/lmsys/vicuna-7b-v1.5/tree/main) and place it under ./base_model/
 
 ```shell
@@ -21,3 +23,5 @@ bash run_stages.sh \
      --s2_feat ./b4dl/stage2_features \
      --model_name_or_path ./base_model/vicuna-v1-5-7b
 ```
+
+`run_stages.sh` 将未识别的参数原样传给两个阶段；`stage2.sh` 默认读取固定的 `./checkpoints/vtimellm-vicuna-v1-5-7b-stage1/mm_projector.bin`。若通过通用 `--output_dir` 更改第一阶段输出，第二阶段不会自动跟随，而且两个阶段会收到同一个输出目录。自定义输出应分别运行阶段脚本并显式指定第二阶段的 `--pretrain_mm_mlp_adapter`，核验实际参数和资产后再启动。脚本找不到 `nvcc` 时还会尝试执行 `conda install`。运行前应核对环境、数据和路径；这里的脚本默认值不是已完成的论文复现凭证。

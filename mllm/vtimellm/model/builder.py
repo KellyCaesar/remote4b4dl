@@ -13,6 +13,17 @@ def load_lora(model, lora_path):
         non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
         if any(k.startswith('model.model.') for k in non_lora_trainables):
             non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
+        # PEFT saves trainable base-layer biases under the wrapped name, but
+        # this state is loaded before the LoRA wrapper has been attached.
+        base_keys = model.state_dict().keys()
+        normalized = {}
+        for key, value in non_lora_trainables.items():
+            candidate = key[:-len('base_layer.bias')] + 'bias' if key.endswith('.base_layer.bias') else key
+            target = candidate if key not in base_keys and candidate in base_keys else key
+            if target in normalized:
+                raise ValueError('duplicate non-LoRA parameter after PEFT name normalization: ' + target)
+            normalized[target] = value
+        non_lora_trainables = normalized
         model.load_state_dict(non_lora_trainables, strict=False)
     print('Loading LoRA weights...')
     model = PeftModel.from_pretrained(model, lora_path)

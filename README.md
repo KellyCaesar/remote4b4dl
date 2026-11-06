@@ -9,7 +9,8 @@ Understanding".
 主线实现位于 `mllm/b4dl_core/` 与 `mllm/vtimellm/`。时序几何适配器是已有更新方案；后续结构选择以完整回归结果为依据。实例分割、回答掩码和跨帧跟踪保留为历史研究及可选扩展。
 
 - [开发方向与验收顺序](docs/upcore/README.md)
-- [当前代码审查与待修复项](docs/research/upcore代码审查_20261027.md)
+- [整体管线审查与后续改进](docs/research/upcore_整体管线审查与规范化_20261106.md)
+- [历史代码审查与待修复项](docs/research/upcore代码审查_20261027.md)
 - [项目方法与落实台账](docs/项目方法与落实情况.md)
 
 以下保留原项目的数据生成与基础训练说明；upcore 的入口和当前限制以开发方向文档为准。
@@ -68,6 +69,7 @@ python3 generate_dataset.py \
 Before running, please download [this file](https://huggingface.co/lmsys/vicuna-7b-v1.5/tree/main) and place it under ./base_model/
 
 ```shell
+cd mllm
 bash run_stages.sh \
      --s1_data ./b4dl_dataset/stage1_lidarllm_mm.json \
      --s1_feat ./b4dl/stage1_features \
@@ -76,7 +78,10 @@ bash run_stages.sh \
      --model_name_or_path ./base_model/vicuna-v1-5-7b
 ```
 
-For training, check out here(mllm/README.md).
+The two scripts use paths relative to `mllm/`. The wrapper passes unrecognized
+options to both stages; changing `--output_dir` does not automatically update
+the Stage 2 projector path. See [training entry and limitations](mllm/README.md)
+before running. This legacy entry is separate from the upcore experiment pipeline.
 
 ---
 
