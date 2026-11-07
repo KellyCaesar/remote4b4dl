@@ -91,6 +91,21 @@ class V2TrainingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "global features"):
                 RegionalGeometry(geometry, folder).scene("scene")
 
+    def test_full_validation_checks_assets_and_refuses_partial(self):
+        from scripts.validate_regional_v2_for_training import validate
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            geometry, folder, _, manifest = self.fixture(root)
+            receipt = validate(geometry, folder, root / "receipt.json")
+            self.assertEqual((receipt["scene_count"], receipt["frame_count"], receipt["valid_cell_count"]), (1, 1, 1))
+            manifest["complete"] = False
+            manifest["dataset_id"] = digest({k: v for k, v in manifest.items() if k != "dataset_id"})
+            write_json(folder / "manifest.json", manifest)
+            with self.assertRaisesRegex(ValueError, "completeness"):
+                validate(geometry, folder, root / "partial.json")
+            self.assertFalse((root / "partial.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

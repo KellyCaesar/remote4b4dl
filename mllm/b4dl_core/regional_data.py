@@ -247,8 +247,13 @@ class RegionalGeometry:
             self._cache.pop(ident, None)
         if ident not in self._cache:
             if is_v2:
-                from .regional_assets import load_scene
-                cells, _, _ = load_scene(self.regional_root, ident)
+                from .regional_assets import validate_scene
+                # The manifest was authenticated in __init__, and the scene
+                # hash was checked above. Avoid reparsing the full manifest
+                # for every randomly sampled training example.
+                with np.load(path, allow_pickle=False) as source:
+                    cells = {key: source[key] for key in source.files}
+                validate_scene(cells, record["frames"])
                 reference = self.base.scene(ident)
                 if (not np.array_equal(cells["global_features"], reference["features"])
                         or not np.allclose(cells["global_from_lidar_ego"], reference["frame_geometry"], atol=1e-8, rtol=0)
