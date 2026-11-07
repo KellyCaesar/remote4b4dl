@@ -77,6 +77,8 @@ def main(argv=None):
             p.add_argument("--regional-config")
             p.add_argument("--mixed-plan")
             p.add_argument("--supervision-config")
+            p.add_argument("--engineering-region-subset", action="store_true",
+                           help="restrict an engineering run to scenes in an incomplete regional asset")
         if stage == "grpo":
             p.add_argument("--sft-checkpoint", required=True)
             p.add_argument("--mode", choices=("outcome", "scalar", "process"))
@@ -139,11 +141,19 @@ def main(argv=None):
         dataset = ReasoningDataset(args.dataset, args.geometry_dataset, "train")
         regional_config, mixed_plan, objective = None, None, None
         if args.command == "sft":
+            if args.engineering_region_subset and (not args.engineering or not args.regional_features or args.mixed_plan):
+                raise ValueError("regional subset requires an engineering regional SFT without a mixed plan")
             if bool(args.regional_features) != bool(args.regional_config):
                 raise ValueError("regional SFT requires both --regional-features and --regional-config")
             if args.regional_features:
                 from ..regional_data import RegionalDataset
                 from ..regional_model import RegionalConfig
+                if args.engineering_region_subset:
+                    manifest = read_json(Path(args.regional_features) / "manifest.json")
+                    selected = set(manifest["scenes"])
+                    dataset.requests = [request for request in dataset.requests if request["scene_id"] in selected]
+                    if not dataset.requests:
+                        raise ValueError("regional engineering subset has no train requests")
                 config = read_json(args.regional_config)
                 if config.pop("schema", None) != "b4dl-regional-config-v1":
                     raise ValueError("invalid regional model configuration")

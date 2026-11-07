@@ -22,6 +22,7 @@ class RegionalConfig:
     time_scale_s: float = 4.0
     radius_m: float = 10.0
     neighbors: int = 8
+    centroid_policy: str = "strict_cell"
 
     def __post_init__(self):
         integers = (self.input_width, self.width, self.heads, self.layers, self.ff_width, self.neighbors,
@@ -29,7 +30,8 @@ class RegionalConfig:
         if (any(type(value) is not int for value in integers)
                 or min(self.input_width, self.width, self.heads, self.layers, self.ff_width, self.neighbors) < 1
                 or self.width % self.heads or self.tokens_per_frame not in (1, 5)
-                or type(self.use_temporal) is not bool or type(self.use_geometry) is not bool):
+                or type(self.use_temporal) is not bool or type(self.use_geometry) is not bool
+                or self.centroid_policy not in ("strict_cell", "observed_assignment")):
             raise ValueError("invalid regional architecture")
         if not all(type(value) in (int, float) and 0 < value < float("inf") for value in
                    (self.distance_scale_m, self.time_scale_s, self.radius_m)):
@@ -58,7 +60,7 @@ def visual_token_mask(frame_valid, indices, cell_valid, tokens_per_frame):
     return torch.cat((frame_valid.unsqueeze(-1), occupied.bool() & frame_valid.unsqueeze(-1)), dim=-1)
 
 
-def _validate_cells(features, xyz, indices, valid, frame_valid, ego_from_sst, width):
+def _validate_cells(features, xyz, indices, valid, frame_valid, ego_from_sst, width, centroid_policy="strict_cell"):
     batch, frames = frame_valid.shape
     if (features.ndim != 4 or features.shape[:2] != (batch, frames) or features.shape[-1] != width
             or xyz.shape != (*features.shape[:3], 3) or indices.shape != features.shape[:3]
@@ -75,7 +77,7 @@ def _validate_cells(features, xyz, indices, valid, frame_valid, ego_from_sst, wi
     x = selected.remainder(80).to(xyz.dtype) * .5
     y = torch.div(selected, 80, rounding_mode="floor").to(xyz.dtype) * .5 - 20
     point = xyz[valid]
-    if (((point[:, 0] < x - 1e-4) | (point[:, 0] > x + .5001)
+    if centroid_policy == "strict_cell" and (((point[:, 0] < x - 1e-4) | (point[:, 0] > x + .5001)
          | (point[:, 1] < y - 1e-4) | (point[:, 1] > y + .5001)
          | (point[:, 2] < -2.0001) | (point[:, 2] > 4.0001)).any()):
         raise ValueError("regional centroid outside its SST cell")
@@ -256,7 +258,8 @@ class RegionalProjector(nn.Module):
 
     def encode(self, features, times, poses, valid, cells, xyz, indices, cell_valid, ego_from_sst):
         validate_frames(features, times, poses, valid, geometry=True)
-        _validate_cells(cells, xyz, indices, cell_valid, valid, ego_from_sst, self.config.input_width)
+        _validate_cells(cells, xyz, indices, cell_valid, valid, ego_from_sst, self.config.input_width,
+                        self.config.centroid_policy)
         if features.shape[-1] != self.config.width:
             raise ValueError("global feature width mismatch")
         regions, centres_sst, occupied = self.local_pool(cells, xyz, indices, cell_valid)

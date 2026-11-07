@@ -199,7 +199,7 @@ class RegionalGeometry:
         self.requests, self.targets = geometry.requests, geometry.targets
         self.regional_manifest = read_json(self.regional_root / "manifest.json")
         regional = self.regional_manifest
-        if (regional.get("schema") != SCHEMA or regional.get("dataset_id") != digest(
+        if (regional.get("schema") not in (SCHEMA, "b4dl-regional-features-v2") or regional.get("dataset_id") != digest(
                 {key: value for key, value in regional.items() if key != "dataset_id"})
                 or regional.get("geometry_dataset_id") != self.manifest["dataset_id"]
                 or regional.get("geometry_manifest_sha256") != sha256(geometry.root / "manifest.json")
@@ -207,6 +207,16 @@ class RegionalGeometry:
                 or regional.get("support_sha256") != self.manifest.get("input_scope", {}).get("support_sha256")
                 or regional.get("scene_count") != len(regional.get("scenes", {}))):
             raise ValueError("regional feature manifest identity mismatch")
+        if (not set(regional["scenes"]) <= set(self.manifest["scenes"])
+                or type(regional.get("complete")) is not bool
+                or regional["complete"] != (set(regional["scenes"]) == set(self.manifest["scenes"]))):
+            raise ValueError("regional feature coverage does not match completeness")
+        if regional["schema"] == "b4dl-regional-features-v2":
+            preprocessing = regional.get("preprocessing", {})
+            if (preprocessing.get("point_assignment") != "observed_voxel_layer_output"
+                    or preprocessing.get("valid_cells") != "middle_encoder_voxel_coors_after_drop"
+                    or preprocessing.get("centroid") != "mean_of_original_sst_xyz_of_all_assigned_points"):
+                raise ValueError("unsupported regional v2 coordinate contract")
         if type(cache_scenes) is not int or cache_scenes < 0:
             raise ValueError("invalid regional scene cache size")
         self.cache_scenes, self._cache, self._verified = cache_scenes, OrderedDict(), {}
@@ -215,8 +225,17 @@ class RegionalGeometry:
         if ident not in self.regional_manifest["scenes"]:
             raise ValueError("regional features missing scene: " + ident)
         record, original = self.regional_manifest["scenes"][ident], self.manifest["scenes"][ident]
-        if (record["frames"] != original["frames"] or record["frame_tokens"] != original["frame_tokens"]
-                or record["source_feature_sha256"] != original["sha256"]):
+        is_v2 = self.regional_manifest["schema"] == "b4dl-regional-features-v2"
+        if is_v2:
+            frames = record["frames"]
+            if (len(frames) != original["frames"]
+                    or [frame["lidar"]["sample_data_token"] for frame in frames] != original["frame_tokens"]
+                    or [frame["lidar"]["timestamp_us"] for frame in frames] != original["timestamps_us"]
+                    or record["geometry_scene_sha256"] != original["sha256"]
+                    or record["source_feature_sha256"] != original["source_feature_sha256"]):
+                raise ValueError("regional v2 and geometry scene identities disagree")
+        elif (record["frames"] != original["frames"] or record["frame_tokens"] != original["frame_tokens"]
+              or record["source_feature_sha256"] != original["sha256"]):
             raise ValueError("regional and geometry scene identities disagree")
         path = safe_file(self.regional_root, record["file"])
         stat = path.stat()
@@ -227,13 +246,23 @@ class RegionalGeometry:
             self._verified[ident] = stamp
             self._cache.pop(ident, None)
         if ident not in self._cache:
-            with np.load(path, allow_pickle=False) as source:
-                cells = {key: source[key] for key in source.files}
+            if is_v2:
+                from .regional_assets import load_scene
+                cells, _, _ = load_scene(self.regional_root, ident)
+                reference = self.base.scene(ident)
+                if (not np.array_equal(cells["global_features"], reference["features"])
+                        or not np.allclose(cells["global_from_lidar_ego"], reference["frame_geometry"], atol=1e-8, rtol=0)
+                        or not np.allclose(cells["lidar_ego_from_lidar"], reference["ego_from_lidar"], atol=1e-8, rtol=0)):
+                    raise ValueError("regional v2 global features or LiDAR transforms disagree with geometry")
+                cells = {key: cells[key] for key in ("offsets", "indices", "values", "xyz", "ego_from_sst")}
+            else:
+                with np.load(path, allow_pickle=False) as source:
+                    cells = {key: source[key] for key in source.files}
             if set(cells) != {"offsets", "indices", "values", "xyz", "ego_from_sst"}:
                 raise ValueError("unknown regional scene fields")
             offsets, indices, values, xyz, transform = (cells[key] for key in
                 ("offsets", "indices", "values", "xyz", "ego_from_sst"))
-            frames = record["frames"]
+            frames = original["frames"]
             if (offsets.shape != (frames + 1,) or offsets[0] != 0 or np.any(np.diff(offsets) <= 0)
                     or int(offsets[-1]) != len(indices) or values.shape != (len(indices), 128)
                     or xyz.shape != (len(indices), 3) or transform.shape != (frames, 4, 4)
@@ -243,7 +272,7 @@ class RegionalGeometry:
                 raise ValueError("invalid regional scene arrays")
             x = (indices.astype(np.int64) % 80) * .5
             y = (indices.astype(np.int64) // 80) * .5 - 20.
-            if (((xyz[:, 0] < x - 1e-4) | (xyz[:, 0] > x + .5001)
+            if not is_v2 and (((xyz[:, 0] < x - 1e-4) | (xyz[:, 0] > x + .5001)
                  | (xyz[:, 1] < y - 1e-4) | (xyz[:, 1] > y + .5001)
                  | (xyz[:, 2] < -2.0001) | (xyz[:, 2] > 4.0001)).any()):
                 raise ValueError("regional centroid outside its SST cell")

@@ -505,6 +505,10 @@ def train(dataset, baseline_path, preparation_path, output, stage, recipe, *, de
     regional_manifest = getattr(dataset, "regional_manifest", None)
     if (regional_config is None) != (regional_manifest is None):
         raise ValueError("regional configuration and regional feature dataset must be supplied together")
+    if regional_manifest is not None:
+        policy = "observed_assignment" if regional_manifest["schema"] == "b4dl-regional-features-v2" else "strict_cell"
+        if regional_config.centroid_policy != policy:
+            raise ValueError("regional coordinate policy must match the feature schema")
     if regional_config is not None and stage != "sft":
         raise ValueError("regional training currently supports SFT")
     if (mixed_plan is None) != (objective is None) or mixed_plan is not None and stage != "sft":

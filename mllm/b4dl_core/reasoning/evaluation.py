@@ -68,6 +68,9 @@ def load_model(dataset, baseline, preparation, checkpoint, device, mixed_plan=No
     if regional_options is not None:
         from ..regional_model import RegionalConfig
         regional_config = RegionalConfig(**regional_options)
+        policy = "observed_assignment" if regional_manifest["schema"] == "b4dl-regional-features-v2" else "strict_cell"
+        if regional_config.centroid_policy != policy:
+            raise ValueError("regional coordinate policy must match the feature schema")
     objective = meta["identity"]["common"]["options"].get("supervision")
     if (objective is None) != (mixed_plan is None):
         raise ValueError("mixed checkpoint requires its matched training plan")
