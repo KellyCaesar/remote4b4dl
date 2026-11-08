@@ -50,7 +50,7 @@ def endpoint(root):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ("dataset", "geometry", "regional", "mixed-plan", "s1", "s2", "t0", "configs", "source-configs"):
+    for name in ("dataset", "geometry", "regional", "mixed-plan", "s1", "s2", "t0", "configs", "source-configs", "s2-config"):
         p.add_argument("--" + name, required=True, type=Path)
     args = p.parse_args()
     if __import__("os").environ.get("CUDA_VISIBLE_DEVICES") != "":
@@ -60,7 +60,7 @@ def main():
     s2common, t0common = s2["lineage"]["common"], t0["lineage"]["common"]
     if s2common["implementation"] != source_id:
         raise ValueError("frozen source does not match S2 implementation")
-    s2config = config(args.source_configs / "core_regional_s2_v2.json")
+    s2config = config(args.s2_config)
     s3config = config(args.configs / "core_regional_s3_v2.json")
     s4config = config(args.configs / "core_regional_s4_v2.json")
     if s2config != s2common["options"]["regional"]:
