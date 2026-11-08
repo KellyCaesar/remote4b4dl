@@ -1,0 +1,55 @@
+{
+  "schema": "b4dl-endpoint-evaluation-plan-v1",
+  "dataset": "/root/autodl-tmp/upcore-reasoning-20261030-r1/data-v2",
+  "geometry": "/root/autodl-tmp/mmb4dl-core-trainval-20261023-r1/trainval-v1",
+  "six_protocol": "/root/autodl-tmp/upcore-reasoning-20261030-r1/six-free-protocol/manifest.json",
+  "metric_backend_root": "/root/autodl-tmp/mmb4dl-core-sft-20261023-r1/source-r2/mllm",
+  "gpu_lock": "/root/autodl-tmp/.b4dl_gpu0_eval.lock",
+  "smoke_script": "/root/autodl-tmp/upcore-evaluation-20261108-r1/source/mllm/scripts/smoke_upcore_evaluation.py",
+  "models": [
+    {
+      "name": "s1",
+      "source": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd",
+      "baseline": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+      "preparation": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_preparation.json",
+      "checkpoint": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/s1-v2-formal/step-13851.pt",
+      "checkpoint_sha256": "596fc1f4ca628729b8d8ee3f1e3ded6eaf1797b4a70af7126956af5237cca2d5",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "updates": 13851
+    },
+    {
+      "name": "s2",
+      "source": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd",
+      "baseline": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+      "preparation": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_preparation.json",
+      "checkpoint": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/s2-next-20261108/s2-formal/step-13851.pt",
+      "checkpoint_sha256": "29dd4b1fb5cf820b128537c3719fda63aad7cf4a85710a3a5c76d07f2d75b011",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "updates": 13851
+    },
+    {
+      "name": "b3",
+      "source": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd",
+      "baseline": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+      "preparation": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_preparation.json",
+      "original_b3": true
+    },
+    {
+      "name": "t0",
+      "source": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source",
+      "baseline": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+      "preparation": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source/mllm/configs/core_geometry_preparation.json",
+      "checkpoint": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/t0-formal/step-13851.pt",
+      "checkpoint_sha256": "2055ef66f7e15eb14b23671a0c1323dbb6bcddd8d67abfee05e137ae6ccee5e2",
+      "mixed_plan": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/mixed-plan-seed42",
+      "updates": 13851
+    },
+    {
+      "name": "b3_t0",
+      "source": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source",
+      "baseline": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+      "preparation": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/source/mllm/configs/core_geometry_preparation.json",
+      "original_b3": true
+    }
+  ]
+}
