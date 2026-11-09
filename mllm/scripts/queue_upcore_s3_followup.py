@@ -14,7 +14,7 @@ from b4dl_core.reasoning.__main__ import recipe_for
 from b4dl_core.reasoning.evaluation import validate_ablation_lineage
 from b4dl_core.reasoning.trainer import implementation_identity
 from b4dl_core.regional_model import RegionalConfig
-from queue_regional_s2 import verify_training
+from queue_regional_s2 import process_alive, verify_training
 from run_upcore_evaluation_queue import alive, build_stages, inference_receipt, validate_stage
 
 
@@ -42,6 +42,20 @@ def train_command(plan, output, regional_config=None, objective=None, smoke=Fals
     return cmd
 
 
+def upstream_alive(pid, plan_path, output):
+    if not alive(pid) or not process_alive(pid, "run_upcore_evaluation_queue.py"):
+        return False
+    try:
+        process = Path("/proc") / str(pid)
+        args = process.joinpath("cmdline").read_bytes().decode().split("\0")
+        cwd = process.joinpath("cwd").resolve(strict=True)
+        actual_plan = (cwd / args[args.index("--plan") + 1]).resolve()
+        actual_output = (cwd / args[args.index("--output") + 1]).resolve()
+        return actual_plan == Path(plan_path).resolve() and actual_output == Path(output).resolve()
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        return False
+
+
 def validate_upstream(plan):
     path = Path(plan["evaluation_plan"])
     if sha256(path) != plan["evaluation_plan_sha256"]:
@@ -50,7 +64,8 @@ def validate_upstream(plan):
     if upstream["plan_sha256"] != plan["evaluation_plan_sha256"]:
         raise ValueError("evaluation status plan mismatch")
     if upstream["status"] == "running":
-        if not alive(upstream.get("pid")):
+        pid = upstream.get("pid")
+        if not upstream_alive(pid, path, plan["evaluation_output"]):
             raise RuntimeError("evaluation process missing while marked running")
         return False
     if upstream["status"] != "complete":
@@ -166,7 +181,7 @@ def main():
     save()
     write_json(root / "bound-inputs.json", bound_inputs)
     try:
-        with (root / "controller.lock").open("a") as lock:
+        with Path(plan["controller_lock"]).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             source = Path(plan["source"])
             if implementation_identity() != plan["source_id"]:

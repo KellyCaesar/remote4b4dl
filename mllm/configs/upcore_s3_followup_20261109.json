@@ -21,6 +21,7 @@
   "historical_sft_report": "/root/autodl-tmp/upcore-reasoning-20261030-r1/followup-dev-20261101-r1/dev-identity-report.json",
   "historical_sft_predictions": "/root/autodl-tmp/upcore-reasoning-20261030-r1/followup-dev-20261101-r1/dev-identity",
   "gpu_lock": "/root/autodl-tmp/.b4dl_gpu0_eval.lock",
+  "controller_lock": "/root/autodl-tmp/.b4dl_upcore_s3_followup.lock",
   "updates": 13851,
   "smoke_updates": 50,
   "minimum_free_gib": 8,

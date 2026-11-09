@@ -55,10 +55,10 @@ class FollowupQueueTests(unittest.TestCase):
                 queue.validate_upstream(plan)
             status.update(status="running", pid=12345)
             (eval_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
-            with patch.object(queue, "alive", return_value=False):
+            with patch.object(queue, "upstream_alive", return_value=False):
                 with self.assertRaisesRegex(RuntimeError, "process missing"):
                     queue.validate_upstream(plan)
-            with patch.object(queue, "alive", return_value=True):
+            with patch.object(queue, "upstream_alive", return_value=True):
                 self.assertFalse(queue.validate_upstream(plan))
 
     def test_completed_upstream_requires_every_stage_and_validation(self):
