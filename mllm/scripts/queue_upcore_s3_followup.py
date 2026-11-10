@@ -56,26 +56,66 @@ def upstream_alive(pid, plan_path, output):
         return False
 
 
+def truncation_expected(plan, upstream, stages):
+    """Return the frozen stop point when an operator-approved truncation is recorded."""
+    stop = plan.get("evaluation_stop_after")
+    if not stop:
+        return None
+    names = [row["name"] for row in stages]
+    if stop not in names:
+        raise ValueError("unknown evaluation stop point")
+    expected = names[:names.index(stop) + 1]
+    path = Path(plan["evaluation_output"]) / "truncation.json"
+    if not path.is_file():
+        return None
+    receipt = read_json(path)
+    if (receipt.get("schema") != "b4dl-evaluation-truncation-v1"
+            or receipt.get("reason") != "user_approved_scope_reduction"
+            or receipt.get("stopped_after") != stop
+            or receipt.get("stage_list") != expected
+            or receipt.get("plan_sha256") != plan["evaluation_plan_sha256"]):
+        raise ValueError("truncated evaluation receipt mismatch")
+    if upstream.get("completed") != expected:
+        raise ValueError("truncated evaluation stage list mismatch")
+    return expected
+
+
 def validate_upstream(plan):
     path = Path(plan["evaluation_plan"])
+    output = Path(plan["evaluation_output"])
     if sha256(path) != plan["evaluation_plan_sha256"]:
         raise ValueError("evaluation plan changed")
-    upstream = read_json(Path(plan["evaluation_output"]) / "status.json")
+    upstream = read_json(output / "status.json")
     if upstream["plan_sha256"] != plan["evaluation_plan_sha256"]:
         raise ValueError("evaluation status plan mismatch")
-    if upstream["status"] == "running":
+    truncated = plan.get("evaluation_stop_after") and (output / "truncation.json").is_file()
+    if upstream["status"] == "running" and not truncated:
         pid = upstream.get("pid")
         if not upstream_alive(pid, path, plan["evaluation_output"]):
             raise RuntimeError("evaluation process missing while marked running")
         return False
-    if upstream["status"] != "complete":
+    if upstream["status"] in ("failed", "stopped") and not plan.get("evaluation_stop_after"):
+        raise RuntimeError("evaluation did not complete: " + str(upstream.get("error")))
+    if upstream["status"] not in ("running", "complete", "failed", "stopped"):
         raise RuntimeError("evaluation did not complete: " + str(upstream.get("error")))
     evaluation = read_json(path)
-    stages = build_stages(evaluation, Path(plan["evaluation_output"]))
-    if upstream["completed"] != [row["name"] for row in stages]:
-        raise ValueError("evaluation stage list is incomplete or changed")
+    stages = build_stages(evaluation, output)
+    if upstream["status"] == "complete":
+        expected = [row["name"] for row in stages]
+        if upstream["completed"] != expected:
+            raise ValueError("evaluation stage list is incomplete or changed")
+    else:
+        expected = truncation_expected(plan, upstream, stages)
+        if expected is None:
+            raise RuntimeError("evaluation did not complete: " + str(upstream.get("error")))
+        if upstream["status"] == "running" and (
+                upstream_alive(upstream.get("pid"), path, plan["evaluation_output"])
+                or alive(upstream.get("stage_pid"))):
+            raise RuntimeError("truncated evaluation is still running")
     models = {row["name"]: row for row in evaluation["models"]}
-    for stage in stages:
+    by_name = {row["name"]: row for row in stages}
+    for name in expected:
+        stage = by_name[name]
         validate_stage(stage, models[stage["model"]])
     return True
 

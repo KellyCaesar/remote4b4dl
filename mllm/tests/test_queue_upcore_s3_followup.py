@@ -84,6 +84,45 @@ class FollowupQueueTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "bad receipt"):
                     queue.validate_upstream(plan)
 
+    def test_truncated_upstream_requires_exact_frozen_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps({"models": [{"name": "s1"}]}), encoding="utf-8")
+            eval_dir = root / "eval"
+            eval_dir.mkdir()
+            plan = {"evaluation_plan": str(plan_path), "evaluation_plan_sha256": queue.sha256(plan_path),
+                    "evaluation_output": str(eval_dir), "evaluation_stop_after": "b"}
+            stages = [{"name": name, "model": "s1"} for name in ("a", "b", "c")]
+            status = {"plan_sha256": plan["evaluation_plan_sha256"], "status": "running", "pid": 999,
+                      "completed": ["a", "b"]}
+            receipt = {"schema": "b4dl-evaluation-truncation-v1", "reason": "user_approved_scope_reduction",
+                       "stopped_after": "b", "stage_list": ["a", "b"],
+                       "plan_sha256": plan["evaluation_plan_sha256"]}
+            (eval_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            with patch.object(queue, "build_stages", return_value=stages), \
+                    patch.object(queue, "upstream_alive", return_value=False), \
+                    patch.object(queue, "alive", return_value=False), \
+                    patch.object(queue, "validate_stage") as check:
+                with self.assertRaisesRegex(RuntimeError, "process missing"):
+                    queue.validate_upstream(plan)
+                (eval_dir / "truncation.json").write_text(json.dumps(receipt), encoding="utf-8")
+                self.assertTrue(queue.validate_upstream(plan))
+                self.assertEqual(check.call_count, 2)
+                with patch.object(queue, "upstream_alive", return_value=True):
+                    with self.assertRaisesRegex(RuntimeError, "still running"):
+                        queue.validate_upstream(plan)
+                receipt["stage_list"] = ["a"]
+                (eval_dir / "truncation.json").write_text(json.dumps(receipt), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+                    queue.validate_upstream(plan)
+                receipt["stage_list"] = ["a", "b"]
+                (eval_dir / "truncation.json").write_text(json.dumps(receipt), encoding="utf-8")
+                status["completed"] = ["a"]
+                (eval_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "stage list mismatch"):
+                    queue.validate_upstream(plan)
+
     def test_incomplete_report_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
