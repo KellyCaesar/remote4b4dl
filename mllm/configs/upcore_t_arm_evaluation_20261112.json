@@ -1,0 +1,58 @@
+{
+  "schema": "b4dl-t-arm-evaluation-plan-v1",
+  "source": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd",
+  "source_id": "945c18da355978c0539445539f2db1f87e1b26aee584fef75f60beb880258e96",
+  "dataset": "/root/autodl-tmp/upcore-reasoning-20261030-r1/data-v2",
+  "geometry": "/root/autodl-tmp/mmb4dl-core-trainval-20261023-r1/trainval-v1",
+  "baseline": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_baseline_original_b3_trainval.json",
+  "preparation": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/source-293a5cd/mllm/configs/core_geometry_preparation.json",
+  "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+  "mixed_plan": "/root/autodl-tmp/upcore-regional-20261107-a5017e9-r1/mixed-plan-seed42",
+  "python": "/root/autodl-tmp/upcore-reasoning-20261030-r1/runtime/wqlc/bin/python",
+  "gpu_lock": "/root/autodl-tmp/.b4dl_gpu0_eval.lock",
+  "controller_lock": "/root/autodl-tmp/.b4dl_upcore_t_eval.lock",
+  "updates": 13851,
+  "requests": 13602,
+  "split": "internal_dev",
+  "condition": "identity",
+  "max_new_tokens": 512,
+  "seed": 42,
+  "minimum_free_gib": 5,
+  "arms": [
+    {
+      "name": "t0-matched",
+      "checkpoint": "/root/autodl-tmp/upcore-s3-followup-20261110-r1/t0-matched-formal/step-13851.pt",
+      "checkpoint_sha256": "95ee9850eb283a83040c033cb50cda8979846a2f714fa52e011336f721ce7f10",
+      "regional": null,
+      "cost_rank": 0
+    },
+    {
+      "name": "t1",
+      "checkpoint": "/root/autodl-tmp/upcore-s3-followup-20261110-r1/t1-formal/step-13851.pt",
+      "checkpoint_sha256": "b9aa0f264ecea3e22cdbb14aa895186871611871bf2bd06862e90c93e63bcbab",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "cost_rank": 1
+    },
+    {
+      "name": "t2",
+      "checkpoint": "/root/autodl-tmp/upcore-s3-followup-20261110-r1/t2-formal/step-13851.pt",
+      "checkpoint_sha256": "953268e12af12c89a3263c4032871252bd642adf863fc988ce4e56caaaf05eaa",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "cost_rank": 2
+    },
+    {
+      "name": "t3",
+      "checkpoint": "/root/autodl-tmp/upcore-s3-followup-20261110-r1/t3-formal/step-13851.pt",
+      "checkpoint_sha256": "a4cc961437167e2aa75a44135bdbb25ce3649edf354d5dfe6dde158a8ac1236e",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "cost_rank": 3
+    },
+    {
+      "name": "t3-no-replay",
+      "checkpoint": "/root/autodl-tmp/upcore-s3-followup-20261110-r1/t3-no-replay-formal/step-13851.pt",
+      "checkpoint_sha256": "f326dfb0d7fa5ed97ed1fd0995ccab296132a9aa27f7c49ac3bf9e178480c24f",
+      "regional": "/root/autodl-tmp/upcore-regional-v2-20261107-2422d96-r1/regional-v2-full",
+      "cost_rank": 4
+    }
+  ]
+}
